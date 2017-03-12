@@ -25,7 +25,7 @@ class classifier(object):
             'BDTG'   : 1, # boosted decision tree with grad boosting
             'MLP'    : 0, # multilayer perceptron (ANN)
             'FDA_GA' : 0, # function discriminant analysis with GA minimizer
-            'PDEFoam': 0, # likelihood estimator using self-adapting phase-space binning
+            'PDEFoam': 0, # self-adapting likelihood estimator using  
         }
 
         ## Training and testing data file name

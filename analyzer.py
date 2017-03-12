@@ -791,7 +791,7 @@ class analyzer(object):
     def getSignalHistogram(self, sample, doSF=0, doISR=True, 
                            extraWeight=None, applyEffs=True,
                            JEtype='', applyISRWeight=True,
-                           extraCuts=None):
+                           extraCuts=None, applyTrigWeight='cv'):
 
         ## if doSF<0, then do not apply btag SFs
         sampleSuffix = ''
@@ -805,7 +805,8 @@ class analyzer(object):
                             extraCuts=str(cuts), distRange=self.distRange,
                             nBins=self.Bin, applyISRWeight=doISR,
                             extraWeight=extraWeight, applyEffs=applyEffs,
-                            extraCuts=extraCuts)
+                            extraCuts=extraCuts, 
+                            applyTrigWeight=applyTrigWeight)
         return hist
 
     def setSignalHistogram(self, sample):
@@ -927,7 +928,38 @@ class analyzer(object):
 
     def getTrigSystHists(self, sample):
 
+        ## first set central value for comparison
+        if sample not in self.signalHist.GetName():
+            setSignalHistogram(sample)
+
+        ## get up and down variations
+        varUpHist = getSignalHistogram(sample, applyTrigWeight='up')
+        varDnHist = getSignalHistogram(sample, applyTrigWeight='dn')
+
+        self.sigSystDict['Trig'] =  = getSystFromVarHists(varUpHist,
+                                                          varDnHist,
+                                                          self.signalHist)
+
     def getJetEnergySystHists(self, sample, JEtype):
+        """
+        For both jet energy correction and jet energy resolution systs.
+        Using separate sample files, so things will speed up if 
+        we don't apply all data/mc corrections and just take deviation.
+        """
+
+        ## get up and down variations
+        varUpHist = getSignalHistogram(sample, JEtype=JEtype+'up', doSF=-1,
+                                       doISR=False, applyEffs=False,
+                                       applyISRWeight=False, 
+                                       applyTrigWeight=False)
+        varDnHist = getSignalHistogram(sample, JEtype=JEtype+'down', doSF=-1,
+                                       doISR=False, applyEffs=False,
+                                       applyISRWeight=False, 
+                                       applyTrigWeight=False)
+
+        ## set JE syst using average as CV
+        self.sigSystDict[JEtype] = getSystFromVarHists(varUpHist,
+                                                       varDnHist)
 
     def getJetIDSystHist(self):
 
@@ -948,8 +980,8 @@ class analyzer(object):
         ## clone signalHist to ensure consistent binning
         systHist = self.signalHist.Clone()
 
-        ## flat 2.7% uncertainty
-        lumiError = 0.027
+        ## flat 2.6% uncertainty from lumi group
+        lumiError = 0.026
 
         ## fill the histogram
         for i in range(1,self.Bins+1):
@@ -960,9 +992,17 @@ class analyzer(object):
     def getSignalSystHists(self, sample):
 
     def subtractSignalContamination(self, sample):
-        """ Still need to implement T1tttt SL contamination subtaction
         """
-        
+        Be sure to do this after computing all systematic uncertainties
+        ***Still need to implement T1tttt SL contamination subtaction**
+        """
+
+        ## Warning message in case we do things out of order
+        if self.sigSystDict == {}:
+            print "***Warning***"
+            print "Any systematic uncertainties computed after"
+            print "signal contamination subtraction will be biased."
+
         ## top/W contamination
         topContam = self.predDict['TopW'].Clone()
 
@@ -989,7 +1029,26 @@ class analyzer(object):
 
     def getPiePlots(self, graphs, rangeList=range(45,50), doSymmetric=True, colorDict=None, doUncert=False, binning=None):
 
-    def R(self, val):
+    def Round(self, val):
+        """
+        Find out the order of magnitude before rounding to the appropriate 
+        significant digit
+        """
+
+        ## Find out what order of magnitude
+        ## anything below zero is zero order of magnitude
+        if(val<=0):
+            order = 0
+        else:
+            order = int(math.floor(math.log10(val)))
+            
+        ## Find out number of digits to keep after decimal point
+        if order<=0:
+            nFigs=3-order
+        elif order>0:
+            nFigs = max(order+3,0)
+
+        return round(val, nFigs)
 
     def getLine(self, sampleDict, Key, Bin, spc, doSymmetric):
 
