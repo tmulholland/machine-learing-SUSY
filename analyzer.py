@@ -110,7 +110,7 @@ class analyzer(object):
         ## later without having to remake plots
         self.canvasDict = {}
 
-    def getZdr(self):
+    def setZdr(self):
 
         ## blinding cuts
         bCut = (self.distRange[1]-self.distRange[0]-
@@ -142,7 +142,7 @@ class analyzer(object):
         ## Z/gamma double ratio 
         self.Zdr = RA2b.getDoubleRatioPlot(graphs)
 
-    def getRZG(self):
+    def setRZG(self):
 
         ## blinding cuts
         bCut = (self.distRange[1]-self.distRange[0]-
@@ -174,7 +174,7 @@ class analyzer(object):
 
             rzg[BDTshape] = zinv
 
-    def getZpred(self):
+    def setZpred(self):
 
         ## blinding cuts
         bCut = (self.distRange[1]-self.distRange[0]-
@@ -197,21 +197,21 @@ class analyzer(object):
         
             ## compute R(Z/gamma) unless already done so
             if(BDTshape not in rzg.keys()):
-                getRZG()
+                setRZG()
               
             ## apply R(Z/gamma)
             photon.Multiply(self.rzg[BDTshape])
     
             ## compute double ratio unless already done so
             if(Zdr == None):
-                getZdr()
+                setZdr()
 
             ## apply overall DR scaling factor 
             photon.Scale(self.Zdr[0][0])
 
-            zPredDict[BDTshape] = photon
+            self.zPredDict[BDTshape] = photon
 
-    def getZpredSyst(self):
+    def setZpredSyst(self):
 
         ## blinding cuts
         bCut = (self.distRange[1]-self.distRange[0]-
@@ -235,9 +235,9 @@ class analyzer(object):
         for BDTshape in self.BDTshapes:
 
             ## check if prediction is stored yet
-            ## if not, get prediction
+            ## if not, set prediction
             if BDTshape not in zPredDict.keys():
-                getZpred()
+                setZpred()
 
             ## get cuts beyond baseline
             cuts = self.htCut+self.hdpCut+self.hpfCaloCut
@@ -341,7 +341,7 @@ class analyzer(object):
             self.zSystDict['ZinvGpur'] = [gPurHist]
 
 
-    def getData(self, nUnblindBins=0):
+    def setData(self, nUnblindBins=0):
 
         ## Blind Cut Default: all signal data blind
         bCut = (self.distRange[1]-self.distRange[0]-
@@ -354,7 +354,7 @@ class analyzer(object):
                                      distRange=self.distRange,
                                      nBins=self.Bins,extraCuts=str(cuts))
 
-    def getCorrHistQCD(self):
+    def setCorrHistQCD(self):
         
         ## loop over discriminator distributions
         for BDTshape in BDTshapes:
@@ -365,7 +365,7 @@ class analyzer(object):
                 qcdTF.SetBinError(binIter,qcdTF2qcd.GetBinError(Bin))
 
 
-    def getNormFromFit(self, doCorrQCD=True):
+    def setNormFromFit(self, doCorrQCD=True):
 
         ## Simulation sample names
         D1 = "topWIDP"
@@ -618,7 +618,7 @@ class analyzer(object):
 
         return histRet
 
-    def getPred(self, doCorrQCD=True, setWeight=-1):
+    def setPred(self, doCorrQCD=True, setWeight=-1):
 
         ## use setWeight>=0 to get perturbed
         ## distributions for finding shape syst
@@ -634,7 +634,7 @@ class analyzer(object):
                 continue
             ## check to see if Norm has been computed yet
             elif BDTshape not in self.Norm.keys():
-                getNormFromFit()
+                setNormFromFit()
             ## QCD prediction fom LDP control region
             elif BDTshape == 'QCD':
                 cuts = htCut+ldpCut+hpfCaloCut
@@ -701,7 +701,7 @@ class analyzer(object):
 
         return [hStat,hTF]
 
-    def getSystHists(self):
+    def setSystHists(self):
 
         dataFlag = ''
         if(doData==True):
@@ -750,7 +750,7 @@ class analyzer(object):
             if doSmoothDict[bkg]:
                 smoothNorm = {bkg: Norm[bkg]}
                 smoothDict = {bkg: False}
-                noSmoothPred = getPred(smoothNorm,smoothDict)
+                noSmoothPred = setPred(smoothNorm,smoothDict)
                 S0 = noSmoothPred[bkg]
                 S1 = smooth(S0)
                 S2 = smooth(S1)
@@ -774,17 +774,17 @@ class analyzer(object):
                 dnNormHist.SetBinContent(binIter,normDnSyst)
 
             ## store in syst uncertainty dictionary
-            self.systHists['NCR'+bkg] = [statHist,TFhist]
-            self.systHists[bkg+'Norm'] = [upNormHist, dnNormHist]
-            self.systHists[bkg+'Shape'] = [upShapeHist, dnShapeHist]
-            self.systHists[bkg+'Pur'] = [purSystHist]
+            self.systDict['NCR'+bkg] = [statHist,TFhist]
+            self.systDict[bkg+'Norm'] = [upNormHist, dnNormHist]
+            self.systDict[bkg+'Shape'] = [upShapeHist, dnShapeHist]
+            self.systDict[bkg+'Pur'] = [purSystHist]
             if self.doSmoothDict[bkg]:
-                self.systHists[bkg+'Smooth'] = [upsystSmooth, dnsystSmooth]
+                self.systDict[bkg+'Smooth'] = [upsystSmooth, dnsystSmooth]
 
         ## opened external file so we need to change the
         ## working directory back to 0
-        for Key in self.systHists:
-            for hist in systHists[Key]:
+        for Key in self.systDict:
+            for hist in systDict[Key]:
                 hist.SetDirectory(0)
 
 
@@ -841,7 +841,7 @@ class analyzer(object):
 
         return [upSyst,dnSyst]
 
-    def getBTagSystHists(self, sample):
+    def setBTagSystHists(self, sample):
 
         ## interpretations on FastSim only
         ## only other sample requiring btag Systs is Zinv
@@ -878,7 +878,7 @@ class analyzer(object):
                                                          tmpHistList[1],
                                                          self.signalHist)
                 
-    def getScaleSystHists(self, sample):
+    def setScaleSystHists(self, sample):
 
 
         ## first set central value for comparison
@@ -910,7 +910,7 @@ class analyzer(object):
         self.sigSystDict['ScaleSignal'] = getSystFromVarHists(varUpHist,
                                                               varDnHist,
                                                               self.signalHist)
-    def getISRSystHists(self, sample):
+    def setISRSystHists(self, sample):
 
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
@@ -926,7 +926,7 @@ class analyzer(object):
                                                             varDnHist,
                                                             self.signalHist)
 
-    def getTrigSystHists(self, sample):
+    def setTrigSystHists(self, sample):
 
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
@@ -940,7 +940,7 @@ class analyzer(object):
                                                           varDnHist,
                                                           self.signalHist)
 
-    def getJetEnergySystHists(self, sample, JEtype):
+    def setJetEnergySystHists(self, sample, JEtype):
         """
         For both jet energy correction and jet energy resolution systs.
         Using separate sample files, so things will speed up if 
@@ -961,7 +961,7 @@ class analyzer(object):
         self.sigSystDict[JEtype] = getSystFromVarHists(varUpHist,
                                                        varDnHist)
 
-    def getJetIDSystHist(self):
+    def setJetIDSystHist(self):
 
         ## clone signalHist to ensure consistent binning
         systHist = self.signalHist.Clone()
@@ -975,7 +975,7 @@ class analyzer(object):
 
         self.sigSystDict['JetIDSignal'] = systHist
 
-    def getLumiSystHist(self):
+    def setLumiSystHist(self):
 
         ## clone signalHist to ensure consistent binning
         systHist = self.signalHist.Clone()
@@ -989,7 +989,7 @@ class analyzer(object):
 
         self.sigSystDict['LumiSignal'] = systHist
 
-    def getSignalSystHists(self, sample):
+    def setSignalSystHists(self, sample):
 
     def subtractSignalContamination(self, sample):
         """
@@ -1025,7 +1025,53 @@ class analyzer(object):
         self.signalHist.Add(topContam,-1)
         self.signalHist.Add(qcdContam,-1)
 
-    def getGraphFromHists(self, hist, systUp, systDn, doQuad=True):
+    def getGraphFromHists(self, hist, systDict):
+        """
+        Get graph with asymmetrical errors. 
+        Default is to add syst errors in quadrature.
+        """
+
+        ## get central values from hist
+        graph = ROOT.TGraphAsymmErrors(hist)
+        
+        ## loop over bins to set errors from systDict
+        for binIter in range(hist.GetNbinsX()):
+
+            ## add up in quadruature the fractional uncertainties
+            upSystTot = 0.
+            dnSystTot = 0.
+            for systKey in systDict:
+
+                ## stat error is a pure number, 
+                ## using sqrt(N) as uncertainty here
+                if systKey.statswith('N'):
+                    upSystTot = math.sqrt(
+                        upSystTot**2
+                        +1./systDict[systKey][0].GetBinContent(binIter))
+                    dnSystTot = math.sqrt(
+                        dnSystTot**2
+                        +1./systDict[systKey][0].GetBinContent(binIter))
+
+                elif len(systDict[systKey])==1: ## symmetrical systematic
+                    upSystTot = math.sqrt(
+                        upSystTot**2
+                        +systDict[systKey][0].GetBinContent(binIter)**2)
+                    dnSystTot = math.sqrt(
+                        dnSystTot**2
+                        +systDict[systKey][0].GetBinContent(binIter)**2)
+                    
+                else: ## asymmetrical systematic
+                    upSystTot = math.sqrt(
+                        upSystTot**2
+                        +systDict[systKey][0].GetBinContent(binIter)**2)
+                    dnSystTot = math.sqrt(
+                        dnSystTot**2
+                        +systDict[systKey][1].GetBinContent(binIter)**2)
+
+            graph.SetPointEYhigh(binIter, upSystTot*hist.GetBinContent(i+1))
+            graph.SetPointEYlow(binIter,  dnSystTot*hist.GetBinContent(i+1))
+
+        return graph
 
     def getPiePlots(self, graphs, rangeList=range(45,50), doSymmetric=True, colorDict=None, doUncert=False, binning=None):
 
