@@ -980,8 +980,8 @@ class analyzer(object):
         ## clone signalHist to ensure consistent binning
         systHist = self.signalHist.Clone()
 
-        ## flat 2.6% uncertainty from lumi group
-        lumiError = 0.026
+        ## flat 2.5% uncertainty from lumi group
+        lumiError = 0.025
 
         ## fill the histogram
         for i in range(1,self.Bins+1):
