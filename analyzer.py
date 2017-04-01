@@ -3,7 +3,7 @@ import RA2b
 import numpy
 import math
 import os
-
+import pickle
 
 class analyzer(object):
     """ Main analysis code for my thesis work.
@@ -113,8 +113,48 @@ class analyzer(object):
         ## later without having to remake plots
         self.canvasDict = {}
 
-    def setZdr(self):
+    def dumpAnalyzer(self, fileName=None):
+        """ Use this to save work, i.e. so you dont have to rerun all of
+        the time consuming background predictions. This is especially useful
+        in case of a crash. This function uses pickle.
+        """
+        
+        ## decide output name if none given
+        if fileName==None:
+            if self.doData:
+                fileName='Data.pkl'
+            else:
+                fileName='MC.pkl'
 
+        afile = open(fileName, 'wb')
+        
+        pickle.dump(self, afile)
+        afile.close()
+
+    def loadAnalyzer(self, fileName=None):
+        """ Use this to load a stored analyzer (see above).
+        This is especially useful
+        in case of a crash. This function uses pickle.
+        """
+        
+        ## decide output name if none given
+        if fileName==None:
+            if self.doData:
+                fileName='Data.pkl'
+            else:
+                fileName='MC.pkl'
+                
+        afile = open(fileName, 'rb')
+        
+        newAnalyzer = pickle.load(afile)
+
+        afile.close()
+        
+        return newAnalyzer
+
+    def setZdr(self):
+        """ Compute the Z prediction double ratio with error bands
+        """
 
         ## double ratio computation takes
         ## a list of tgraphs
@@ -206,6 +246,8 @@ class analyzer(object):
             self.rzg[BDTshape+keySuffix] = zinv
 
     def setZpred(self):
+        """ Make full Z prediction (less systematic uncertainties)
+        """
 
         ## must do LDP shapes as well for QCD contamination
         shapeList = self.BDTshapes + [shape+'LDP' for shape in self.BDTshapes]
@@ -248,7 +290,9 @@ class analyzer(object):
             self.zPredDict[BDTshape+keySuffix] = photon
 
     def setZpredSyst(self):
-
+        """ Make full Z prediction and systematic uncertainties. Will run
+        Z prediction if not already stored. 
+        """
         ## Uncertainties taken as inputs from other studies
         ## these uncertainties will be hard coded for now
         effSyst = 0.05
@@ -408,7 +452,12 @@ class analyzer(object):
         self.zSystDict['ZinvGpur'] = [gPurHist]
 
 
-    def setData(self, nUnblindBins=0):
+    def setData(self, nUnblindBins=25):
+        """ Get data in signal region. Already unblinded so default is fully
+        unblind. However, you can reblind the data by using setData(N) instead,
+        where N is the number of bins you wish to unblind (i.e. N=0 is fully 
+        blind)
+        """
 
         ## Blind Cut Default: all signal data blind
         bCut = (self.distRange[1]-self.distRange[0]-
@@ -422,6 +471,8 @@ class analyzer(object):
                                      nBins=self.Bins,extraCuts=str(cuts))
 
     def setCorrHistQCD(self):
+        """ HDP/LDP correction histogram from QCD MC
+        """
 
         ## using MC to get correction
         Name = 'qcdIDP'
@@ -458,6 +509,10 @@ class analyzer(object):
 
 
     def setQcdCsFrac(self):
+        """ Extract the QCD purity using fits with the QCD MC as signal
+        template and single lepton LDP control sample as background template
+        """
+
         D1 = "topWIDP"
         D2 = "qcdIDP"
         Q1 = 'qcdIDP'
@@ -635,6 +690,9 @@ class analyzer(object):
 
 
     def setNormFromFit(self, doCorrQCD=True):
+        """ Fit the Z subtrackted sideband data in the top+W-like 
+        boosted decision tree output. Templates are from control sample data.
+        """
 
         ## Simulation sample names
         D1 = "topWIDP"
@@ -873,7 +931,9 @@ class analyzer(object):
 
             
     def aveBins(self, hist, binList):
-
+        """ Helper function for use with smoothing. Not smoothing at the 
+        moment so this function may deteriorate.
+        """
         ## average over binList range
         ## save average val and error
         valList = []
@@ -949,6 +1009,9 @@ class analyzer(object):
         return histRet
 
     def setPred(self, doCorrQCD=True, setWeight=-1):
+        """ Compute full top+W and QCD predictions less systematic 
+        uncertainties
+        """
 
         Q1 = 'qcdIDP'
         Q2 = 'topWIDP'
@@ -1005,9 +1068,15 @@ class analyzer(object):
         histL.Multiply(nonClosureFactor)
 
         ## Get non-closure multiplicative factor for QCD ~20%
+        ## REMOVED!!
         fQCD = ROOT.TFile.Open('qcdSystHists.root','read')
         nonClosureFactorQCD = fQCD.Get('nonClosureFactorQCD')
-        histQCD.Multiply(nonClosureFactorQCD)
+        ##histQCD.Multiply(nonClosureFactorQCD)
+
+        ## set negative QCD yields (2 bins) equal to 0
+        for binIter in range(1,self.Bins+1):
+            if histQCD.GetBinContent(binIter)<0:
+                histQCD.SetBinContent(binIter,0)
 
         ## store in prediction dictionary
         self.predDict['QCD'] = histQCD
@@ -1020,7 +1089,8 @@ class analyzer(object):
              
 
     def getStatHist(self, sampleName):
-
+        """ Computes the control sample statistics
+        """
         cuts = self.htCut+self.hpfCaloCut
         if 'QCD' in sampleName:
             cuts+=self.ldpCut
@@ -1055,7 +1125,8 @@ class analyzer(object):
         return hStat
 
     def getNormSystHist(self, bkg):
-
+        """ Turns the Norm dictionary into syst uncert histograms
+        """
         ## set normalization error
         normSystHist = self.predDict[bkg].Clone()
         for binIter in range(1,self.Bins+1):
@@ -1066,6 +1137,9 @@ class analyzer(object):
         return normSystHist
 
     def getStatSystHists(self, bkg):
+        """ Computes the control sample statistics and transfer factor for 
+        inputs to the higgs combine tool. 
+        """
 
         TFhist = self.predDict[bkg].Clone()            
 
@@ -1078,7 +1152,9 @@ class analyzer(object):
         return [statHist, TFhist]
 
     def setSystHistsTopW(self):
-
+        """ Computes the full top+W prediction with systematic uncertainties
+        will run setPred() if prediction dictionary is empty
+        """
         ## check if need to run prediction first
         if 'TopW' not in self.predDict.keys():
             self.setPred()
@@ -1098,28 +1174,28 @@ class analyzer(object):
                 binIter,(nonClosureFactorSyst.GetBinContent(binIter)-1)*0.5+1)
 
         ## top systs
-        self.systDictTopW['IsoSystHist'] = [
+        self.systDictTopW['TopWIsoSystHist'] = [
             fTop.Get('UpIsoSystHist'), 
             fTop.Get('DnIsoSystHist')]
-        self.systDictTopW['MTWSystHist'] = [
+        self.systDictTopW['TopWMTWSystHist'] = [
             fTop.Get('UpMTWSystHist'),
             fTop.Get('DnMTWSystHist')]
-        self.systDictTopW['PuritySystHist'] = [
+        self.systDictTopW['TopWPuritySystHist'] = [
             fTop.Get('UpPuritySystHist'), 
             fTop.Get('DnPuritySystHist')]
-        self.systDictTopW['MuIsoSystHist'] = [
+        self.systDictTopW['TopWMuIsoSystHist'] = [
             fTop.Get('UpMuIsoSystHist'),
             fTop.Get('DnMuIsoSystHist')]
-        self.systDictTopW['MuRecoSystHist'] = [
+        self.systDictTopW['TopWMuRecoSystHist'] = [
             fTop.Get('UpMuRecoSystHist'),
             fTop.Get('DnMuRecoSystHist')]
-        self.systDictTopW['ElecIsoSystHist'] = [
+        self.systDictTopW['TopWElecIsoSystHist'] = [
             fTop.Get('UpElecIsoSystHist'),
             fTop.Get('DnElecIsoSystHist')]
-        self.systDictTopW['ElecRecoSystHist'] = [
+        self.systDictTopW['TopWElecRecoSystHist'] = [
             fTop.Get('UpElecRecoSystHist'),
             fTop.Get('DnElecRecoSystHist')]
-        self.systDictTopW['DiLepContributionSystHist'] = [
+        self.systDictTopW['TopWDiLepContributionSystHist'] = [
             fTop.Get('UpDiLepContributionSystHist'),
             fTop.Get('DnDiLepContributionSystHist')]
         self.systDictTopW['TopWLepAccSystHist'] = [
@@ -1127,12 +1203,12 @@ class analyzer(object):
             fTop.Get('DnLepAccSystHist')]
         self.systDictTopW['TopWHadTauNonClosure'] = [
             fTop.Get('hadTauClosure')]
-        self.systDictTopW['nonClosure'] = [nonClosureFactorSyst]
+        self.systDictTopW['TopWnonClosure'] = [nonClosureFactorSyst]
 
 
         ## Norm and NStat uncertainties 
-        self.systDictTopW['NCR'] = self.getStatSystHists('TopW')
-        self.systDictTopW['Norm'] = [self.getNormSystHist('TopW')]
+        self.systDictTopW['TopWNCR'] = self.getStatSystHists('TopW')
+        self.systDictTopW['TopWNorm'] = [self.getNormSystHist('TopW')]
 
         ## opened external file so we need to change the
         ## working directory back to 0
@@ -1141,6 +1217,9 @@ class analyzer(object):
                 hist.SetDirectory(0)
 
     def setSystHistsQCD(self):
+        """ Computes the full QCD prediction with systematic uncertainties
+        will run setPred() if prediction dictionary is empty
+        """
 
         ## check if need to run prediction first
         if 'QCD' not in self.predDict.keys():
@@ -1153,6 +1232,7 @@ class analyzer(object):
         fQCD = ROOT.TFile.Open('qcdSystHists.root','read')
             
         ## take 50% uncertainty on non closure multiplicative factor
+        ## REMOVED!!
         nonClosureFactor = fQCD.Get('nonClosureFactorQCD')
         nonClosureFactorSyst = nonClosureFactor.Clone()
         for binIter in range(1,nonClosureFactorSyst.GetNbinsX()+1):
@@ -1193,7 +1273,7 @@ class analyzer(object):
         for binIter in range(1,self.Bins+1):
             drUpSyst.SetBinContent(binIter,1.+Qdr[1]['Sig[0]'][binIter-1][0])
             drDnSyst.SetBinContent(binIter,1.-Qdr[1]['Sig[0]'][binIter-1][1])
-        self.systDictQCD['dr'] = [drUpSyst,drDnSyst]
+        self.systDictQCD['QCDdr'] = [drUpSyst,drDnSyst]
         
         ## MC stat from HDP/LDP correction hist
         corrStat = self.qcdCorrHist['Sig[0]'].Clone()
@@ -1201,7 +1281,7 @@ class analyzer(object):
             corrStat.SetBinContent(binIter,
                             1+self.qcdCorrHist['Sig[0]'].GetBinError(binIter))
             corrStat.SetBinError(binIter,0)
-        self.systDictQCD['mcStat'] = [corrStat]
+        self.systDictQCD['QCDmcStat'] = [corrStat]
 
         ## btag SFs
         btagUpSyst = self.predDict['QCD'].Clone()
@@ -1224,7 +1304,7 @@ class analyzer(object):
             btagUpSyst.SetBinError(binIter,0)
             btagDnSyst.SetBinContent(binIter,dnSyst)
             btagDnSyst.SetBinError(binIter,0)
-        self.systDictQCD['btag'] = [btagUpSyst,btagDnSyst]
+        self.systDictQCD['QCDbtag'] = [btagUpSyst,btagDnSyst]
 
         ## Contamination symmetric uncert
         purSyst = self.predDict['QCD'].Clone()
@@ -1238,11 +1318,11 @@ class analyzer(object):
         for binIter in range(1,self.Bins+1):
             purSyst.SetBinContent(binIter,1.+purSyst.GetBinContent(binIter))
             purSyst.SetBinError(binIter,0)
-        self.systDictQCD['purity'] = [purSyst]
+        self.systDictQCD['QCDpurity'] = [purSyst]
 
         ## Norm and NStat uncertainties 
-        self.systDictQCD['NCR'] = self.getStatSystHists('QCD')
-        self.systDictQCD['Norm'] = [self.getNormSystHist('QCD')]
+        self.systDictQCD['QCDNCR'] = self.getStatSystHists('QCD')
+        self.systDictQCD['QCDNorm'] = [self.getNormSystHist('QCD')]
 
         ## opened external file so we need to change the
         ## working directory back to 0
@@ -1250,9 +1330,14 @@ class analyzer(object):
             for hist in self.systDictQCD[Key]:
                 hist.SetDirectory(0)
         
-    def getSignalHistogram(self, sample, doSF=0, doISR=True,
+    def getSignalHistogram(self, sample, doSF=0, doISR=True, setWeight=None,
                            extraWeight='TrigWeight', applyEffs=True,
                            JE='', extraCuts=None, cuts=None):
+        """ Returns signal histogram in signal-like boosted decision tree 
+        output. Use this to compute SUSY yields and compute variation for 
+        systematic uncertainties
+        Default parameters are no systematic variations. 
+        """
 
         ## if doSF<0, then do not apply btag SFs
         sampleSuffix = ''
@@ -1265,17 +1350,26 @@ class analyzer(object):
             cuts = str(self.htCut+self.hdpCut+self.hpfCaloCut)
 
         hist = RA2b.getDist(sample+JE,
-                            self.varPrefix+'Sig'+sampleSuffix,
+                            self.varPrefix+'Sig'+sampleSuffix, setWeight=None,
                             extraCuts=str(cuts), distRange=self.distRange,
                             nBins=self.Bins, applyISRWeight=doISR,
                             extraWeight=extraWeight, applyEffs=applyEffs)
         return hist
 
     def setSignalHistogram(self, sample):
-
+        """ Stores default SUSY histogram for a given sample
+        """
         self.signalHist = self.getSignalHistogram(sample)
 
     def getSystFromVarHists(self,UP,DN,CV=None):
+        """ Function to compute systematic from a list of histograms.
+
+        If CV is none, CV will default to the average of the two histograms.
+        If you want asymmetric uncertainties, you should give self.signalHist
+        as the third input parameter. Otherwise, uncertainties will be 
+        symmetric. 
+        """
+
 
         ## If no central value histogram is given,
         ## use average of up and down syst hists
@@ -1307,6 +1401,10 @@ class analyzer(object):
         return [upSyst,dnSyst]
 
     def setBTagSystHists(self, sample):
+        """ 6 (up and down) systematic uncertainties based on the 
+        btag, ctag, and light flavor jet mistagging.
+        There are two sets:(both fullsim and fastsim)
+        """
 
         ## interpretations on FastSim only
         ## only other sample requiring btag Systs is Zinv
@@ -1338,13 +1436,15 @@ class analyzer(object):
                 tmpHistList.append(self.getSignalHistogram(sample, 
                                                            doSF=variation))
                     
-            self.sigSystDict[syst] = self.getSystFromVarHists(tmpHistList[0],
-                                                              tmpHistList[1],
-                                                              self.signalHist)
+            self.sigSystDict[str('Signal')+syst] = self.getSystFromVarHists(
+                tmpHistList[0],
+                tmpHistList[1],
+                self.signalHist)
                 
     def setScaleSystHists(self, sample):
-
-
+        """ Renomalization and factorization scale uncertainties
+        """
+        
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
             self.setSignalHistogram(sample)
@@ -1373,10 +1473,12 @@ class analyzer(object):
             varUpHist.SetBinContent(binIter,max(binList))
             varDnHist.SetBinContent(binIter,min(binList))
 
-        self.sigSystDict['ScaleSignal'] = self.getSystFromVarHists(varUpHist,
+        self.sigSystDict['SignalScale'] = self.getSystFromVarHists(varUpHist,
                                                             varDnHist,
                                                             self.signalHist)
     def setISRSystHists(self, sample):
+        """ Initial state radiation systematics 
+        """
 
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
@@ -1388,11 +1490,17 @@ class analyzer(object):
         varDnHist = self.getSignalHistogram(sample, doISR=False, 
                                             extraWeight='(TrigWeight*ISRdn)')
 
-        self.sigSystDict['ISRSignal'] = self.getSystFromVarHists(varUpHist,
+        self.sigSystDict['SignalISR'] = self.getSystFromVarHists(varUpHist,
                                                             varDnHist,
                                                             self.signalHist)
 
     def setTrigSystHists(self, sample):
+        """ Trigger efficiency uncertainties
+
+        Bayesian Neural Net regression analysis 
+        to determine the HT and MHT dependence 
+        of the trigger efficiency
+        """
 
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
@@ -1402,7 +1510,7 @@ class analyzer(object):
         varUpHist = self.getSignalHistogram(sample, extraWeight='TrigWeightUp')
         varDnHist = self.getSignalHistogram(sample, extraWeight='TrigWeightDn')
 
-        self.sigSystDict['Trig'] =  self.getSystFromVarHists(varUpHist,
+        self.sigSystDict['SignalTrig'] =  self.getSystFromVarHists(varUpHist,
                                                              varDnHist,
                                                              self.signalHist)
 
@@ -1418,10 +1526,14 @@ class analyzer(object):
         varDnHist = self.getSignalHistogram(sample, JE=JEtype+'down')
 
         ## set JE syst using average as CV (only have "signal" trees)
-        self.sigSystDict[JEtype] = self.getSystFromVarHists(varUpHist,
-                                                            varDnHist)
+        self.sigSystDict[str('Signal')+JEtype] = self.getSystFromVarHists(
+            varUpHist,
+            varDnHist)
 
     def setJetIDSystHist(self):
+        """ JetID doesn't work for fastsim so we use the recommented 0.99
+        scale factor with 1% uncertainty
+        """
 
         ## clone signalHist to ensure consistent binning
         systHist = self.signalHist.Clone()
@@ -1433,10 +1545,11 @@ class analyzer(object):
         for i in range(1,self.Bins+1):
             systHist.SetBinContent(i,1+idError)
 
-        self.sigSystDict['JetIDSignal'] = [systHist]
+        self.sigSystDict['SignalJetID'] = [systHist]
 
     def setLumiSystHist(self):
-
+        """ Luminosity uncertainty from the lumi group
+        """
         ## clone signalHist to ensure consistent binning
         systHist = self.signalHist.Clone()
 
@@ -1447,26 +1560,27 @@ class analyzer(object):
         for i in range(1,self.Bins+1):
             systHist.SetBinContent(i,1+lumiError)
 
-        self.sigSystDict['LumiSignal'] = [systHist]
+        self.sigSystDict['SignalLumi'] = [systHist]
 
     def setSignalSystHists(self, sample):
         """ Set all systematic uncertainties for signal. 
         List:
-        btagSFs(6), ISR, Trig, JECs, JERs, JetID, Lumi
+        btagSFs(6), ISR, Scales, Trig, JECs, JERs, JetID, Lumi
         still need PU reweighting
         """
-
 
         ## first get b-tag SF central value for comparison
         if sample not in self.signalHist.GetName():
             self.setSignalHistogram(sample)
-
 
         ## btag systematic uncertainties
         self.setBTagSystHists(sample)
 
         ## Initial state radiation syst
         self.setISRSystHists(sample)
+
+        ## renorm and factorization scales
+        self.setScaleSystHists(sample)
 
         ## Trigger systematic from bayesian neural network
         self.setTrigSystHists(sample)
@@ -1508,11 +1622,10 @@ class analyzer(object):
 
         ## QCD contamination
         cuts = self.ldpCut+self.htCut+self.hpfCaloCut
-        qcdContam = getSignalHistogram(sample, extraCuts=str(cuts))
+        qcdContam = self.getSignalHistogram(sample, extraCuts=str(cuts))
                         
         ## Scale qcd contamination by qcd CR scaling
-        qcdContam.Multiply(qcdCorrHist['Sig'])
-        qcdContam.Scale(Norm['QCD'][0])
+        qcdContam.Multiply(self.systDictQCD['NCR'][1])
                 
         ## Subtract off contamination
         self.signalHist.Add(topContam,-1)
@@ -1569,37 +1682,144 @@ class analyzer(object):
 
         return graph
 
-    def Round(self, val):
-        """
-        Find out the order of magnitude before rounding to the appropriate 
-        significant digit
+    def getLine(self, lineList):
+        """ Helper function to format the lines of the datacard
         """
 
-        ## Find out what order of magnitude
-        ## anything below zero is zero order of magnitude
-        if(val<=0):
-            order = 0
-        else:
-            order = int(math.floor(math.log10(val)))
-            
-        ## Find out number of digits to keep after decimal point
-        if order<=0:
-            nFigs=3-order
-        elif order>0:
-            nFigs = max(order+3,0)
+        fullKeyList = (self.sigSystDict.keys()+self.systDictQCD.keys()
+                       +self.systDictTopW.keys()+self.zSystDict.keys())
 
-        return round(val, nFigs)
+        blankSpace = ' '*(max([len(Key) for Key in fullKeyList])+5)
 
-    def getLine(self, sampleDict, Key, Bin, spc, doSymmetric):
+        row = ''
+        for cell in lineList:
+            row+=str(cell)+blankSpace[len(str(cell)):]
 
-        return 0
+        row+='\n'
+        
+        return row
 
-    def makeDataCards(self, sample, doSymmetric=True):
+    def makeDataCard(self, sample, doSymmetric=True):
+        """ Makes one datacard for a given signal sample
+        """
 
-        return 0
+        ## compute signal yield and subtract off contamination
+        self.setSignalSystHists(sample)
+        self.subtractSignalContamination(sample)
+
+        # collect Zinv and signal predictions in predDict
+        self.predDict['Zinv'] = self.zPredDict['Sig[0]']
+        self.predDict['Signal'] = self.signalHist
+
+        ## get root e.g. T1tttt, T1bbbb, T2tt, ...
+        nRoot = 8-2*int(sample[1])
+        Root = sample[:nRoot]
+        
+        ## actual datacard (txt file)
+        card = open(Root+"/"+sample+'.txt', "w") 
+
+        ## label top of file, first with sample mass parameters
+        header ="# SUSY model: "
+        header += sample.replace('_',' mGl=',1).replace('_',' mLSP=',1)[:-8]
+        header += '\n'
+
+        imax = self.nSigBins ## num channels
+        jmax = 3 ## num backgrounds QCD + Zinv +topW
+        ## num nuisance parameters use '*' for automatic counting
+        kmax = '*'
+
+        ## labels for samples
+        processes = ['Signal','Zinv','TopW','QCD']
+
+        ## list of systematics which are fully correlated
+        corrSysts = ['SignalLumi', 'SignalIsoTrk', 'SignalJetID', 
+                     'SignalPileUp', 'SignalScale', 'SignalISR',
+                     'TopWNorm', 'TopWnonClosure', 'QCDNorm', 'ZinvNorm']
+        corrSuffix = '_Cor'
+
+        ## empty dict to add nuisances 
+        fullNuisanceDict = {}
+
+        ## first Bin (where signal region begins)
+        fB = self.Bins-self.nSigBins+1
+        ## signal Bins
+        sB = range(fB,self.Bins+1)
+
+        ## bin number and observation in signal region
+        nBins = ['bin','','']
+        nObs = ['observation','','']
+        nBins2 = ['bin','','']
+        process1 = ['process','','']+processes*self.nSigBins
+        process2 = ['process','','']+[0,1,2,3]*self.nSigBins
+        rate = ['rate','','']
+        for iB in sB:
+            nBins.append(iB)
+            nObs.append(int(self.dataHist.GetBinContent(iB)))
+            for jm in range(jmax):
+                nBins.append('')
+                nObs.append('')
+            for proc in processes:
+                rate.append(round(self.predDict[proc].GetBinContent(iB),6))
+            nBins2+=[iB]*4
+            for sigSyst in self.sigSystDict.keys():
+                if sigSyst in corrSysts:
+                    if iB!=sB[0]:
+                        continue
+                    sigLabel = sigSyst+'_Cor'
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN']
+                    if len(sigSystDict[sigLabel])==1:
+                        fullNuisanceDict[sigLabel].append(
+                            round(sigSystDict[sigLabel][0],6))
+                    else:
+                        fullNuisanceDict[sigLabel].append(
+                            str(round(sigSystDict[sigLabel][1],6))+'/'+
+                            str(round(sigSystDict[sigLabel][1],6)))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel]+='-'*(self.nSigBins*(jmax+1)-1)
+                if 'NCR' in sigSyst:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'gmN']
+                    #fullNuisanceDict[sigLabel].append(
+                    ## add dashes
+                    #fullNuisanceDict[sigLabel] = 
+        ## Number of signal events
+
+        card.write(header)
+        card.write("------------\n")
+        card.write('imax '+str(imax)+' number of channels\n')
+        card.write('jmax '+str(jmax)+' number of backgrounds\n')
+        card.write('kmax '+str(kmax)+' number of nuisance parameters\n')
+        card.write("------------\n")
+        card.write(self.getLine(nBins))
+        card.write(self.getLine(nObs))
+        card.write("------------\n")
+        card.write(self.getLine(nBins2))
+        card.write(self.getLine(process1))
+        card.write(self.getLine(process2))
+        card.write(self.getLine(rate))
+        ## nuisances are here
+        for iB in sB:
+            for proc in processes:
+                for Syst in fullNuisanceDict.keys():
+                    ## group similar processes together
+                    if proc not in Syst:
+                        continue
+                    ## do correlated systs here
+                    if (Syst.endswith(corrSuffix) and iB==sB[0]):
+                        card.write(self.getLine(fullNuisanceDict[Syst]))
+                        continue
+                    ## add uncorrelated syst here
+                    if Syst.endswith(str(iB)):
+                        card.write(self.getLine(fullNuisanceDict[Syst]))
+                                            
+        card.write("------------\n")
+        card.close()
 
     def makeAllCards(self, sampleClass):
-        
+        """ For a given model class (e.g. T1bbbb), compute the full
+        set of datacards for the entire mass plane
+        """
+
         ## Get full list of files available
         listOfFiles = os.listdir('/media/hdd/work/data/lpcTrees'+
                                  '/Skims/Run2ProductionV11/scan/tree_signal')
@@ -1621,4 +1841,5 @@ class analyzer(object):
             self.signalHist = ROOT.TH1D()
             self.sigSystDict = {}
 
-            makeDataCards(sample)
+            self.makeDataCard(sample)
+
