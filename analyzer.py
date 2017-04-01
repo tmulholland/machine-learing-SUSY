@@ -28,23 +28,17 @@ class analyzer(object):
         self.Bins = 50
         self.nSigBins = 25
         self.distRange = [0.,1.]
-        self.binning = [x*0.02+0.01 for x in range(0, 50)]
-        self.varBinning = {
-            'Sig': [0.,0.02,0.04,0.06,0.08,0.1,0.2,0.3,0.4,0.5,0.6,0.8,1.0],
-            'TopW': [0.,0.02,0.04,0.06,0.08,0.1,0.2,0.3,0.4,0.5,0.6,0.8,1.0],
-            'QCD': [0.,0.2,0.4,0.5,0.6,0.7,0.8,0.9,0.92,0.94,0.96,0.98,1.0],
-        }
 
         ## BDT background shapes
-        self.BDTshapes = ['QCD','TopW', 'Sig']
+        self.BDTshapes = ['Bkg', 'Sig[0]']
         self.colorDict = {'QCD': 8, 'Zinv': 2, 'TopW': 4}
 
         ## prefix for discriminator output
-        self.varPrefix = 'BDTG_NTrees2000_MaxDepth4_MNS2p_'
+        self.varPrefix = 'BDT_'
 
         ## define cuts different than baseline RA2b
         self.dPhiCut = 'none'
-        self.htCut = ROOT.TCut('HT>800')
+        self.htCut = ROOT.TCut('HT>700')
         self.hdpCut = ROOT.TCut('DeltaPhi1>0.1&&DeltaPhi2>0.1&&'
                                 'DeltaPhi3>0.1&&DeltaPhi4>0.1')
 
@@ -52,12 +46,17 @@ class analyzer(object):
                                 'DeltaPhi3<0.1||DeltaPhi3<0.1')
         self.hpfCaloCut = ROOT.TCut('MET/CaloMET>0.9') 
         self.lpfCaloCut = ROOT.TCut('MET/CaloMET<0.9')
+        self.bCut = (self.distRange[1]-self.distRange[0]-
+                     self.nSigBins/float(self.Bins))
+        self.blindCut = ROOT.TCut(self.varPrefix+'Sig[0]<'+str(self.bCut))
 
         ## dictionary for prediction to smooth
         ## default no smoothing anywhere
         ## likely not needed if we use LDP control sample for QCD
         self.doSmoothDict = {'QCD': False, 'TopW': False}
 
+        ## N(bins) for QCD DR 
+        self.BinsDR = 10
 
         ##
         ## Begin variables to compute
@@ -97,10 +96,14 @@ class analyzer(object):
         ## HDP/LDP correction histograms
         self.qcdCorrHist = {}
         
+        ## QCD purity histograms
+        self.qcdPurDict = {}
+
         ## top/W and QCD systematic 
         ## uncertainty histograms
         ## format: 
-        self.systDict = {}
+        self.systDictTopW = {}
+        self.systDictQCD = {}
 
         ## Signal systematics histogram
         ## format: 
@@ -112,28 +115,26 @@ class analyzer(object):
 
     def setZdr(self):
 
-        ## blinding cuts
-        bCut = (self.distRange[1]-self.distRange[0]-
-                (self.nSigBins)/float(self.Bins))
-        blindCut = ROOT.TCut(self.varPrefix+'Sig<'+str(bCut))
 
         ## double ratio computation takes
         ## a list of tgraphs
         graphs = []
+
         for BDTshape in self.BDTshapes:
 
             ## keep Sig reigion blind
-            if BDTshape != 'Sig':
-                cuts = self.htCut+self.hdpCut+self.hpfCaloCut+blindCut
+            if 'Sig' not in BDTshape:
+                cuts = self.hdpCut+self.htCut+self.hpfCaloCut+self.blindCut
             else:
-                cuts = self.htCut+self.hdpCut+self.hpfCaloCut
-    
+                cuts = self.hdpCut+self.htCut+self.hpfCaloCut
+
+
             ## get dr graphs
             graphs.append(
                 RA2b.getDoubleRatioGraph(self.varPrefix+BDTshape,
                                          applyPuWeight=True,
-                                         extraCuts=cuts,
-                                         dphiCut=self.dPhiCut))
+                                         extraCuts=str(cuts),
+                                         doCG=False))
     
         ## make plots viewable after runtime
         for graph in graphs:
@@ -143,19 +144,30 @@ class analyzer(object):
         self.Zdr = RA2b.getDoubleRatioPlot(graphs)
 
     def setRZG(self):
+        """Compute ratio of Z over Gamma from simulation and store it 
+        as in dictionary (one key per BDT output shape)
+        """
 
-        ## blinding cuts
-        bCut = (self.distRange[1]-self.distRange[0]-
-                (self.nSigBins)/float(self.Bins))
-        blindCut = ROOT.TCut(self.varPrefix+'Sig<'+str(bCut))
+        ## must do LDP shapes as well for QCD contamination
+        shapeList = self.BDTshapes + [shape+'LDP' for shape in self.BDTshapes]
+        ## must do btag SFs
+        shapeList += ['Sig[1]','Sig[2]']
 
-        for BDTshape in self.BDTshapes:
+        for BDTshape in shapeList:
             
+            keySuffix = ''
             ## if not signal, apply blinding criteria
-            cuts = self.hdpCut+self.hpfCaloCut+self.htCut
-            if(BDTshape != 'Sig'):
-                cuts+=blindCut
-                
+            cuts = self.hpfCaloCut+self.htCut
+            if('Sig' not in BDTshape):
+                cuts+=self.blindCut
+
+            if 'LDP' in BDTshape:
+                cuts+=self.ldpCut
+                BDTshape = BDTshape.replace('LDP','')
+                keySuffix+='LDP'
+            else:
+                cuts+=self.hdpCut
+
             ## photon MC
             gjets = RA2b.getDist('gjetsIDP',self.varPrefix+BDTshape,
                                  distRange=self.distRange,
@@ -167,27 +179,51 @@ class analyzer(object):
             zinv = RA2b.getDist('zinvIDP',self.varPrefix+BDTshape,
                                 distRange=self.distRange,
                                 nBins=self.Bins,
-                                extraCuts=str(cuts),applyPuWeight=True)
+                                extraCuts=str(cuts),applyPuWeight=True,
+                                extraWeight='TrigWeight')
+
+            ## Trigger syst variation for signal region (not for contam)
+            if ('Sig[0]' in BDTshape and 'LDP' not in keySuffix):
+                zinvUp = RA2b.getDist('zinvIDP',self.varPrefix+BDTshape,
+                                    distRange=self.distRange,
+                                    nBins=self.Bins,
+                                    extraCuts=str(cuts),applyPuWeight=True,
+                                    extraWeight='TrigWeightUp')
+
+                zinvDn = RA2b.getDist('zinvIDP',self.varPrefix+BDTshape,
+                                    distRange=self.distRange,
+                                    nBins=self.Bins,
+                                    extraCuts=str(cuts),applyPuWeight=True,
+                                    extraWeight='TrigWeightDn')
+                zinvUp.Divide(gjets)
+                zinvDn.Divide(gjets)
+                self.rzg[BDTshape+'TrigWeightUp'] = zinvUp
+                self.rzg[BDTshape+'TrigWeightDn'] = zinvDn
 
             ## ratio becomes R(Z/gamma)
             zinv.Divide(gjets)
 
-            rzg[BDTshape] = zinv
+            self.rzg[BDTshape+keySuffix] = zinv
 
     def setZpred(self):
 
-        ## blinding cuts
-        bCut = (self.distRange[1]-self.distRange[0]-
-                (self.nSigBins)/float(self.Bins))
-        blindCut = ROOT.TCut(self.varPrefix+'Sig<'+str(bCut))
+        ## must do LDP shapes as well for QCD contamination
+        shapeList = self.BDTshapes + [shape+'LDP' for shape in self.BDTshapes]
 
-        ## loop over discriminant dists
-        for BDTshape in BDTshapes:
-                
+        for BDTshape in shapeList:
+
+            keySuffix = ''
             ## if not signal, apply blinding criteria
-            cuts = self.hdpCut+self.hpfCaloCut+self.htCut
-            if(BDTshape != 'Sig'):
-                cuts+=blindCut
+            cuts = self.hpfCaloCut+self.htCut
+            if('Sig' not in BDTshape):
+                cuts+=self.blindCut
+
+            if 'LDP' in BDTshape:
+                cuts+=self.ldpCut
+                BDTshape = BDTshape.replace('LDP','')
+                keySuffix+='LDP'
+            else:
+                cuts+=self.hdpCut
                 
             ## photon data
             photon = RA2b.getDist('photonIDP',self.varPrefix+BDTshape,
@@ -196,27 +232,22 @@ class analyzer(object):
                                   extraCuts=str(cuts),applyEffs=True)
         
             ## compute R(Z/gamma) unless already done so
-            if(BDTshape not in rzg.keys()):
-                setRZG()
+            if(BDTshape not in self.rzg.keys()):
+                self.setRZG()
               
             ## apply R(Z/gamma)
-            photon.Multiply(self.rzg[BDTshape])
+            photon.Multiply(self.rzg[BDTshape+keySuffix])
     
             ## compute double ratio unless already done so
-            if(Zdr == None):
-                setZdr()
+            if(self.Zdr == None):
+                self.setZdr()
 
             ## apply overall DR scaling factor 
             photon.Scale(self.Zdr[0][0])
 
-            self.zPredDict[BDTshape] = photon
+            self.zPredDict[BDTshape+keySuffix] = photon
 
     def setZpredSyst(self):
-
-        ## blinding cuts
-        bCut = (self.distRange[1]-self.distRange[0]-
-                (self.nSigBins)/float(self.Bins))
-        blindCut = ROOT.TCut(self.varPrefix+'Sig<'+str(bCut))
 
         ## Uncertainties taken as inputs from other studies
         ## these uncertainties will be hard coded for now
@@ -224,7 +255,7 @@ class analyzer(object):
         btagSyst = 0.005
         trigSyst = 0.0035
         gTrig = 0.01
-        fDir = 0.005
+        fDir = 0.015 # 30% on 1-Fdir
         gSF = 0.005
         gPur = 0.01
 
@@ -232,113 +263,149 @@ class analyzer(object):
         ## lower systematic uncertainties
         upSyst = {}
         dnSyst = {}
-        for BDTshape in self.BDTshapes:
 
-            ## check if prediction is stored yet
-            ## if not, set prediction
-            if BDTshape not in zPredDict.keys():
-                setZpred()
+        ## Only need to compute full systematics for signal region
+        BDTshape = 'Sig[0]'
 
-            ## get cuts beyond baseline
-            cuts = self.htCut+self.hdpCut+self.hpfCaloCut
-            if(BDTshape!='Sig'):
-                cuts += blindCut
+        ## check if prediction is stored yet
+        ## if not, set prediction
+        if BDTshape not in self.zPredDict.keys():
+            self.setZpred()
 
-            ## Zll dist without purity applied
-            ## will use this as denominator to get 
-            ## average purity
-            zllTot = RA2b.getDist('zeeIDP',
+        ## get cuts beyond baseline
+        cuts = self.htCut+self.hdpCut+self.hpfCaloCut
+        if('Sig' not in BDTshape):
+            cuts += self.blindCut
+
+        ## Zll dist without purity applied
+        ## will use this as denominator to get 
+        ## average purity
+        zllTot = RA2b.getDist('zeeIDP',
+                              self.varPrefix+BDTshape,
+                              distRange=self.distRange,
+                              nBins=1,extraCuts=str(cuts))
+        ## add Zmm to Zee to get total Zll
+        zllTot.Add(RA2b.getDist('zmmIDP',self.varPrefix+BDTshape,
+                                distRange=self.distRange,
+                                nBins=1,extraCuts=str(cuts)))
+
+        ## Zll dist weighted by purity error
+        purityHist = RA2b.getDist('zeeIDP',
                                   self.varPrefix+BDTshape,
                                   distRange=self.distRange,
-                                  nBins=1,extraCuts=str(cuts))
-            ## add Zmm to Zee to get total Zll
-            zllTot.Add(RA2b.getDist('zmmIDP',self.varPrefix+BDTshape,
-                                    distRange=self.distRange,
-                                    nBins=1,extraCuts=str(cuts)))
+                                  nBins=1,extraCuts=str(cuts),
+                                  applyEffs=True, doEffError=True)
+        ## add Zmm to Zee to get total Zll
+        purityHist.Add(RA2b.getDist('zmmIDP',
+                                  self.varPrefix+BDTshape,
+                                  distRange=self.distRange,
+                                  nBins=1,extraCuts=str(cuts),
+                                  applyEffs=True, doEffError=True))
 
-            ## Zll dist weighted by purity error
-            purityHist = RA2b.getDist('zeeIDP',
-                                      self.varPrefix+BDTshape,
-                                      distRange=self.distRange,
-                                      nBins=1,extraCuts=str(cuts),
-                                      applyEffs=True, doEffError=True)
-            ## add Zmm to Zee to get total Zll
-            purityHist.Add(RA2b.getDist('zmmIDP',
-                                      self.varPrefix+BDTshape,
-                                      distRange=self.distRange,
-                                      nBins=1,extraCuts=str(cuts),
-                                      applyEffs=True, doEffError=True))
+        ## divide out hist without applying purity
+        ## this will give us the average uncertainty
+        purityHist.Divide(zllTot)
+        
 
-            ## divide out hist without applying purity
-            ## this will give us the average uncertainty
-            purityHist.Divide(zllTot)
-            
+        ## clone zPredDict to get consistent binning
+        ## structure for uncertainty histograms
+        drUpHist = self.zPredDict[BDTshape].Clone()
+        drDnHist = self.zPredDict[BDTshape].Clone()
+        cvUpHist = self.zPredDict[BDTshape].Clone()
+        cvDnHist = self.zPredDict[BDTshape].Clone()
+        rzgStatHist = self.zPredDict[BDTshape].Clone()
+        rzgUpBtagHist = self.zPredDict[BDTshape].Clone()
+        rzgDnBtagHist = self.zPredDict[BDTshape].Clone()
+        rzgUpTrigHist = self.zPredDict[BDTshape].Clone()
+        rzgDnTrigHist = self.zPredDict[BDTshape].Clone()
+        gTrigHist = self.zPredDict[BDTshape].Clone()
+        fDirHist = self.zPredDict[BDTshape].Clone()
+        gSFHist = self.zPredDict[BDTshape].Clone()
+        gPurHist = self.zPredDict[BDTshape].Clone()
+        TFhist = self.zPredDict[BDTshape].Clone()
 
-            ## clone zPredDict to get consistent binning
-            ## structure for uncertainty histograms
-            drUpHist = self.zPredDict[BDTshape].Clone()
-            drDnHist = self.zPredDict[BDTshape].Clone()
-            cvUpHist = self.zPredDict[BDTshape].Clone()
-            cvDnHist = self.zPredDict[BDTshape].Clone()
-            rzgUpHist = self.zPredDict[BDTshape].Clone()
-            rzgDnHist = self.zPredDict[BDTshape].Clone()
-            gTrigHist = self.zPredDict[BDTshape].Clone()
-            fDirHist = self.zPredDict[BDTshape].Clone()
-            gSFHist = self.zPredDict[BDTshape].Clone()
-            gPurHist = self.zPredDict[BDTshape].Clone()
-            TFhist = self.zPredDict[BDTshape].Clone()
+        ## NphoZinv key: number of photon events and 
+        ## the corresponding total transfer factor
+        gStatHist = RA2b.getDist('photonIDP',self.varPrefix+BDTshape,
+                                 distRange=self.distRange,nBins=self.Bins,
+                                 extraCuts=str(cuts))
+        TFhist.Divide(gStatHist)
 
-            ## NphoZinv key: number of photon events and 
-            ## the corresponding total transfer factor
-            gStatHist = RA2b.getDist('photonIDP',self.varPrefix+BDTshape,
-                                     distRange=self.distRange,nBins=self.Bins,
-                                     extraCuts=str(cuts))
-            TFhist.Divide(gStatHist)
+        for binIter in range(1,self.Bins+1):
 
-            for binIter in range(1,self.Bins+1):
+            ## Overall normalization uncertainty components:
+            ## DR central val + average purity 
+            ## + lepton SF + btag SF + trig SF
+            cvUpErr = math.sqrt(self.Zdr[0][1]**2
+                                +purityHist.GetBinContent(1)**2
+                                +effSyst**2+btagSyst**2+trigSyst**2)
+            cvDnErr = math.sqrt(self.Zdr[0][1]**2
+                                +purityHist.GetBinContent(1)**2
+                                +effSyst**2+btagSyst**2+trigSyst**2)
+            cvUpHist.SetBinContent(binIter,1+cvUpErr)
+            cvDnHist.SetBinContent(binIter,1-cvDnErr)
 
-                ## Overall normalization uncertainty components:
-                ## DR central val + average purity 
-                ## + lepton SF + btag SF + trig SF
-                cvUpErr = math.sqrt(drCvHist.GetBinContent(binIter)**2
-                                    +purityHist.GetBinContent(binIter)**2
-                                    +effSyst**2+btagSyst**2+trigSyst**2)
-                cvDnErr = math.sqrt(drCvHist.GetBinContent(binIter)**2
-                                    +purityHist.GetBinContent(binIter)**2
-                                    +effSyst**2+btagSyst**2+trigSyst**2)
-                upCvHist.SetBinContent(binIter,cvUpErr)
-                dnCvHist.SetBinContent(binIter,cvDnErr)
+            ## DR shape uncertainty:
+            ## subtract off DR CV error from DR
+            ## to avoid double counting
+            drUpErr = max(self.Zdr[1][BDTshape][binIter-1][0]
+                          -self.Zdr[0][1],0)
+            drDnErr = max(self.Zdr[1][BDTshape][binIter-1][1]
+                          -self.Zdr[0][1],0)
+            drUpHist.SetBinContent(binIter, 1.+drUpErr)
+            drDnHist.SetBinContent(binIter, 1.-drDnErr)
 
-                ## DR shape uncertainty:
-                ## subtract off DR CV error from DR
-                ## to avoid double counting
-                drUpErr = max(self.Zdr[1][BDTshape][binIter-1][0]
-                              -drCvHist.GetBinContent(binIter),0)
-                drDnErr = max(self.Zdr[1][BDTshape][binIter-1][1]
-                              -drCvHist.GetBinContent(binIter),0)
-                drUpHist.SetBinContent(binIter, drUpErr)
-                drDnHist.SetBinContent(binIter, drDnErr)
+            ## R(Z/gamma) stat error, symmetric for now
+            rzgStatHist.SetBinContent(binIter,
+                                    1+self.rzg[BDTshape].GetBinError(binIter))
+            ## R(Z/gamma) btag SF error
+            btagUp = (max(self.rzg['Sig[0]'].GetBinContent(binIter),
+                          self.rzg['Sig[1]'].GetBinContent(binIter),
+                          self.rzg['Sig[2]'].GetBinContent(binIter))
+                      -self.rzg['Sig[0]'].GetBinContent(binIter))
+            btagDn = (self.rzg['Sig[0]'].GetBinContent(binIter)
+                      -min(self.rzg['Sig[0]'].GetBinContent(binIter),
+                           self.rzg['Sig[1]'].GetBinContent(binIter),
+                           self.rzg['Sig[2]'].GetBinContent(binIter)))
+            rzgUpBtagHist.SetBinContent(binIter,
+                            1.+btagUp/self.rzg['Sig[0]'].GetBinContent(binIter))
+            rzgDnBtagHist.SetBinContent(binIter,
+                            1.-btagDn/self.rzg['Sig[0]'].GetBinContent(binIter))
 
-                ## R(Z/gamma) stat error 
-                rzgUpHist.SetBinContent(binIter,self.rzg.GetBinError(binIter))
-                rzgDnHist.SetBinContent(binIter,self.rzg.GetBinError(binIter))
 
-                ## photon related efficiency errors
-                gTrigHist.SetBinContent(binIter,gTrig)
-                fDirHist.SetBinContent(binIter,fDir)
-                gSFHist.SetBinContent(binIter,gSF)
-                gPurHist.SetBinContent(binIter,gPur)
+            ## R(Z/gamma) trig SF error
+            trigUp = (max(self.rzg['Sig[0]'].GetBinContent(binIter),
+                          self.rzg['Sig[0]TrigWeightUp'].GetBinContent(binIter),
+                          self.rzg['Sig[0]TrigWeightDn'].GetBinContent(binIter))
+                      -self.rzg['Sig[0]'].GetBinContent(binIter))
+            trigDn = (self.rzg['Sig[0]'].GetBinContent(binIter)
+                      -min(self.rzg['Sig[0]'].GetBinContent(binIter),
+                        self.rzg['Sig[0]TrigWeightUp'].GetBinContent(binIter),
+                        self.rzg['Sig[0]TrigWeightDn'].GetBinContent(binIter)))
+            rzgUpTrigHist.SetBinContent(binIter,
+                            1.+trigUp/self.rzg['Sig[0]'].GetBinContent(binIter))
+            rzgDnTrigHist.SetBinContent(binIter,
+                            1.-trigDn/self.rzg['Sig[0]'].GetBinContent(binIter))
 
-            ## add individual systematic uncertainties to
-            ## the dictionary containing the Z systematics
-            self.zSystDict['ZinvNorm'] = [upCvHist, dnCvHist]
-            self.zSystDict['ZinvDR'] = [drUpHist, drDnHist]
-            self.zSystDict['ZinvRZG'] = [rzgUpHist, rzgDnHist]
-            self.zSystDict['NphoZinv'] = [photon,TFhist]
-            self.zSystDict['ZinvGtrig'] = [gTrigHist]
-            self.zSystDict['ZinvFdir'] = [fDirHist]
-            self.zSystDict['ZinvGsf'] = [gSFHist]
-            self.zSystDict['ZinvGpur'] = [gPurHist]
+
+            ## photon related efficiency errors
+            gTrigHist.SetBinContent(binIter,1+gTrig)
+            fDirHist.SetBinContent(binIter,1+fDir)
+            gSFHist.SetBinContent(binIter,1+gSF)
+            gPurHist.SetBinContent(binIter,1+gPur)
+
+        ## add individual systematic uncertainties to
+        ## the dictionary containing the Z systematics
+        self.zSystDict['ZinvNorm'] = [cvUpHist, cvUpHist]
+        self.zSystDict['ZinvDR'] = [drUpHist, drDnHist]
+        self.zSystDict['ZinvRZGstat'] = [rzgStatHist]
+        self.zSystDict['ZinvRZGbtag'] = [rzgUpBtagHist, rzgDnBtagHist]
+        self.zSystDict['ZinvRZGtrig'] = [rzgUpTrigHist, rzgDnTrigHist]
+        self.zSystDict['ZinvNCR'] = [gStatHist,TFhist]
+        self.zSystDict['ZinvGtrig'] = [gTrigHist]
+        self.zSystDict['ZinvFdir'] = [fDirHist]
+        self.zSystDict['ZinvGsf'] = [gSFHist]
+        self.zSystDict['ZinvGpur'] = [gPurHist]
 
 
     def setData(self, nUnblindBins=0):
@@ -346,23 +413,225 @@ class analyzer(object):
         ## Blind Cut Default: all signal data blind
         bCut = (self.distRange[1]-self.distRange[0]-
                 (self.nSigBins-nUnblindBins)/float(self.Bins))
-        blindCut = ROOT.TCut(self.varPrefix+'Sig<'+str(bCut))
+        blindCut = ROOT.TCut(self.varPrefix+'Sig[0]<'+str(bCut))
 
         cuts = self.htCut+self.hdpCut+self.hpfCaloCut+blindCut
 
-        self.dataHist = RA2b.getDist('sigIDP',self.varPrefix+'Sig', 
+        self.dataHist = RA2b.getDist('sigIDP',self.varPrefix+'Sig[0]', 
                                      distRange=self.distRange,
                                      nBins=self.Bins,extraCuts=str(cuts))
 
     def setCorrHistQCD(self):
-        
+
+        ## using MC to get correction
+        Name = 'qcdIDP'
+
         ## loop over discriminator distributions
-        for BDTshape in BDTshapes:
-            for binIter in range(1,self.Bins+1):
-                x = i*0.02-0.01
-                Bin = sum([int(x>Bin) for Bin in qcdbinning])
-                qcdTF.SetBinContent(binIter,qcdTF2qcd.GetBinContent(Bin))
-                qcdTF.SetBinError(binIter,qcdTF2qcd.GetBinError(Bin))
+        for BDTshape in self.BDTshapes+['Sig[1]']+['Sig[2]']:
+            #numerator
+            cuts = self.htCut+self.hdpCut+self.hpfCaloCut
+            if 'Sig' not in BDTshape:
+                cuts+=self.blindCut
+            qcdNum = RA2b.getDist(Name,self.varPrefix+BDTshape,
+                                  nBins=self.Bins,distRange=self.distRange,
+                                  extraCuts=str(cuts))
+            #denominator
+            cuts = self.htCut+self.ldpCut+self.hpfCaloCut
+            if 'Sig' not in BDTshape:
+                cuts+=self.blindCut
+            qcdDenom = RA2b.getDist(Name,self.varPrefix+BDTshape,
+                                    nBins=self.Bins,distRange=self.distRange,
+                                    extraCuts=str(cuts))
+            ## correction hist
+            qcdTF2qcd = qcdNum.Clone()
+            qcdTF2qcd.Divide(qcdDenom)
+
+            ## smooth out last bin
+            for binIter in range(self.Bins+1):
+                qcdTF2qcd.SetBinContent(binIter,
+                                        min(2,qcdTF2qcd.GetBinContent(binIter)))
+                qcdTF2qcd.SetBinError(binIter,
+                                      min(1,qcdTF2qcd.GetBinError(binIter)))
+
+            ## set correction hists
+            self.qcdCorrHist[BDTshape] = qcdTF2qcd
+
+
+    def setQcdCsFrac(self):
+        D1 = "topWIDP"
+        D2 = "qcdIDP"
+        Q1 = 'qcdIDP'
+        X1 = "topWslmLDP"
+        X2 = "topWsleLDP"
+
+        if self.doData:
+            D1 = 'sigLDP'
+            D2 = 'sig'
+            X1 = 'slmLDP'
+            X2 = 'sleLDP'
+
+
+        BDTshape = 'Bkg'
+
+        ## Data Hist, low Dphi and high PF/Calo
+        cuts = self.htCut+self.ldpCut+self.hpfCaloCut+self.blindCut
+        hData = RA2b.getDist(D1, self.varPrefix+BDTshape,
+                             distRange=self.distRange, nBins=self.Bins,
+                             extraCuts=str(cuts), applyMHTCut=self.mhtCut)
+        hData2 = RA2b.getDist(D2, self.varPrefix+BDTshape,
+                             distRange=self.distRange, nBins=self.Bins,
+                             extraCuts=str(cuts), applyMHTCut=self.mhtCut)
+
+        hData.Add(hData2)
+
+        qcdPurHist = hData.Clone()
+
+        ## subtract off Zinv measurement
+        if(self.doData and self.zPredDict!=None):
+            hData.Add(self.zPredDict[BDTshape+'LDP'],-1)
+
+        ## QCD Hist shape always from MC
+        hQCD = RA2b.getDist(Q1, self.varPrefix+BDTshape,
+                            distRange=self.distRange, nBins=self.Bins,
+                            extraCuts=str(cuts), applyMHTCut=self.mhtCut)
+
+        nQCD0 = hQCD.Integral()
+        ## SL LDP contamination
+        hSLLDP = RA2b.getDist(X1, self.varPrefix+BDTshape,
+                              distRange=self.distRange, nBins=self.Bins,
+                              extraCuts=str(cuts), applyMHTCut=self.mhtCut,
+                              applyEffs=True)
+        hSLLDP_ = RA2b.getDist(X2, self.varPrefix+BDTshape,
+                               distRange=self.distRange, nBins=self.Bins,
+                               extraCuts=str(cuts), 
+                               applyMHTCut=self.mhtCut,applyEffs=True)
+        hSLLDP.Add(hSLLDP_)
+        nSLLDP0 = hSLLDP.Integral()
+
+        ## Key for dictionaries
+        Key = BDTshape+'NormFitLDP'
+        
+        ## declare canvas for plotting
+        self.canvasDict[Key] = ROOT.TCanvas(Key,Key,0,0,900,600)
+
+
+
+        ## range of fit
+        fitRange_min = self.distRange[0]
+        fitRange_max = self.distRange[1]
+            
+        ## RooFit objects
+        ## define ROO vars
+        ndata = hData.Integral()
+        varX = ROOT.RooRealVar("varX",
+                               hData.GetXaxis().GetTitle(),
+                               fitRange_min,fitRange_max)
+        nqcd  = ROOT.RooRealVar("nqcd",
+                                "estimated number of QCD events",
+                                ndata*8./9., 0.000001, ndata)
+        ncontam = ROOT.RooRealVar("ncontam",
+                                  "top+W contamination in QCD events",
+                                  ndata*1./9., 0.000001, ndata)
+
+        ## define ROO data histograms
+        data     = ROOT.RooDataHist("data",
+                                    "data in signal region" , 
+                                    ROOT.RooArgList(varX), hData)
+        qcd      = ROOT.RooDataHist("qcd_",
+                                    "QCD distribution from control region", 
+                                    ROOT.RooArgList(varX), hQCD)
+        contam      = ROOT.RooDataHist("contam_",
+                                       "top+W contam in QCD control region", 
+                                       ROOT.RooArgList(varX), hSLLDP)
+        
+        ## ROO PDFs (template hists from control regions)
+        qcd_model = ROOT.RooHistPdf("qcd_model",
+                                    "RooFit template for QCD backgrounds", 
+                                    ROOT.RooArgSet(varX), qcd)
+        contam_model = ROOT.RooHistPdf("contam_model",
+                                       "RooFit template for top+W contam",
+                                       ROOT.RooArgSet(varX), contam)
+            
+        # Prepare extended likelihood fits
+        qcd_shape = ROOT.RooExtendPdf("qcd_shape","QCD shape pdf",
+                                      qcd_model, nqcd)
+        contam_shape = ROOT.RooExtendPdf("contam_shape","contam shape pdf",
+                                         contam_model, ncontam)
+
+
+        # Combine the models
+        combModel = ROOT.RooAddPdf("combModel",
+                                   "Combined model for top+W and QCD", 
+                                   ROOT.RooArgList(qcd_shape,contam_shape))
+
+        # Fit the data from the ROO PDF template combo model
+        fitResult = combModel.fitTo(data, 
+                                    ROOT.RooFit.Extended(True), 
+                                    ROOT.RooFit.Save(True), 
+                                    ROOT.RooFit.Minos(True),
+                                    ROOT.RooFit.PrintLevel(-1))
+            
+        ################
+        ## Begin plot fit
+        xframe = varX.frame()
+        data.plotOn(xframe,)
+        combModel.plotOn(xframe)
+        data.plotOn(xframe) # plot again so that it is on top of the errors
+        combModel.plotOn(xframe, ROOT.RooFit.LineColor(ROOT.kBlack))
+        combModel.plotOn(xframe, ROOT.RooFit.Components("qcd_shape"), 
+                         ROOT.RooFit.LineColor(ROOT.kGreen))
+        combModel.plotOn(xframe, ROOT.RooFit.Components("contam_shape"), 
+                         ROOT.RooFit.LineColor(ROOT.kRed))
+        xframe.GetXaxis().SetTitle(BDTshape+'-like BDT Output')
+        xframe.GetYaxis().SetTitleOffset(1.35)
+        xframe.GetYaxis().SetTitle('Events')
+        xframe.SetTitle('')
+        xframe.SetMinimum(0)
+        xframe.Draw()
+        ## End plot fit
+        ################
+
+
+        hCont = hSLLDP.Clone()
+        hCont.Scale(ncontam.getVal()/nSLLDP0)
+        ## add Zinv measurement for total contamination
+        if(self.doData and self.zPredDict!=None):
+            hCont.Add(self.zPredDict[BDTshape+'LDP'])
+        
+        for binIter in range(1,self.Bins+1):
+            if hCont.GetBinContent(binIter)>qcdPurHist.GetBinContent(binIter):
+                qcdPurHist.SetBinContent(binIter,hCont.GetBinContent(binIter)
+                                         +qcdPurHist.GetBinContent(binIter))
+        
+        totalHist = qcdPurHist.Clone()
+        qcdPurHist.Add(hCont,-1)
+        passedHist = qcdPurHist.Clone()
+        qcdPurHist.Divide(totalHist)
+
+        self.qcdPurDict['Bkg'] = (qcdPurHist, passedHist,totalHist)        
+
+        cuts = self.htCut+self.ldpCut+self.hpfCaloCut
+        hContSig = RA2b.getDist(X1, self.varPrefix+'Sig[0]',
+                                distRange=self.distRange, nBins=self.Bins,
+                                extraCuts=str(cuts), applyMHTCut=self.mhtCut,
+                                applyEffs=True)
+        hContSig_ = RA2b.getDist(X2, self.varPrefix+'Sig[0]',
+                                 distRange=self.distRange, nBins=self.Bins,
+                                 extraCuts=str(cuts), 
+                                 applyMHTCut=self.mhtCut,applyEffs=True)
+        hContSig.Add(hContSig_)
+        
+        nContSig0 = 0.
+        for binIter in range(1,26):
+            nContSig0 += hContSig.GetBinContent(binIter)
+        
+        hContSig.Scale(ncontam.getVal()/nContSig0)
+
+        ## add Zinv measurement for total contamination
+        if(self.doData and self.zPredDict!=None):
+            hContSig.Add(self.zPredDict['Sig[0]LDP'])
+
+        self.qcdPurDict['Sig[0]'] = [hContSig]
 
 
     def setNormFromFit(self, doCorrQCD=True):
@@ -372,7 +641,10 @@ class analyzer(object):
         D2 = "qcdIDP"
         T1 = "topWslmIDP"
         T2 = "topWsleIDP"
-        Q = 'qcdIDP'
+        X1 = "topWslmLDP"
+        X2 = "topWsleLDP"
+        Q1 = 'qcdIDP'
+        Q2 = 'topWIDP'
 
         ## Data sample names
         if self.doData:
@@ -380,16 +652,19 @@ class analyzer(object):
             D2 = 'sigLDP'
             T1 = 'slmIDP'
             T2 = 'sleIDP'
-            Q = 'sigIDP'
+            X1 = "slmLDP"
+            X2 = "sleLDP"
+            Q1 = 'sigLDP'
+            Q2 = 'sig'
         
-        ## define empty lists for appending
-        nqcdList = []
-        ntopList = []
 
+        ## turn off annoying warnings
+        ROOT.RooMsgService.instance().setSilentMode(True)
+        ROOT.RooMsgService.instance().setGlobalKillBelow(-10000)
         ## loop over classifier discriminant shapes
         for BDTshape in self.BDTshapes:
             ## Skip signal for getting bkg normalizations
-            if BDTshape == 'Sig':
+            if 'Sig' in BDTshape:
                 continue 
             
             ## Key for dictionaries
@@ -399,49 +674,81 @@ class analyzer(object):
             self.canvasDict[Key] = ROOT.TCanvas(BDTshape,BDTshape,0,0,900,600)
 
             ## Data Hist, high Dphi and high PF/Calo
-            cuts = self.htCut+self.hdpCut+self.hpfCaloCut
+            cuts = self.htCut+self.hdpCut+self.hpfCaloCut+self.blindCut
             hData = RA2b.getDist(D1, self.varPrefix+BDTshape,
                                  distRange=self.distRange, nBins=self.Bins,
                                  extraCuts=str(cuts), applyMHTCut=self.mhtCut)
-            
+
             ## add ldp for data and top/W for Sim
             hData2 = RA2b.getDist(D2, self.varPrefix+BDTshape,
                                   distRange=self.distRange, nBins=self.Bins,
                                   extraCuts=str(cuts), applyMHTCut=self.mhtCut)
+            nTopWTrue = hData.Integral()
+            nQCDTrue = hData2.Integral()
             hData.Add(hData2)
             hData.SetTitle('BDToutput')
             
             ## subtract off Zinv measurement
-            if(doData and zHistDict!=None):
-                hData.Add(zHistDict[BDTshape],-1)
+            if(self.doData and self.zPredDict!=None):
+                hData.Add(self.zPredDict[BDTshape],-1)
+
+            if BDTshape not in self.qcdPurDict.keys():
+                self.setQcdCsFrac()
 
             ## top/W CR
-            cuts = self.htCut+self.hdpCut+self.hpfCaloCut
+            cuts = self.htCut+self.hdpCut+self.hpfCaloCut+self.blindCut
             ## single muon
             hTopW = RA2b.getDist(T1, self.varPrefix+BDTshape,
-                                 distRange=self.distRange=[0,1], 
+                                 distRange=self.distRange, 
                                  nBins=self.Bins, extraCuts=str(cuts), 
-                                 applyMHTCut=self.mhtCut)
+                                 applyMHTCut=self.mhtCut,applyEffs=True)
             ## single electron
             hTopWsle = RA2b.getDist(T2, self.varPrefix+BDTshape,
-                                    distRange=self.distRange=[0,1], 
+                                    distRange=self.distRange, 
                                     nBins=self.Bins, extraCuts=str(cuts),
-                                    applyMHTCut=self.mhtCut)
+                                    applyMHTCut=self.mhtCut,applyEffs=True)
             ## single lepton
             hTopW.Add(hTopWsle)
 
+            # get number of CR events for contamination constraint
+            nSLHDP = float(hTopW.Integral())
 
             ## QCD CR
-            cuts = self.htCut+self.ldpCut+self.hpfCaloCut
-            hQCD = RA2b.getDist(Q, self.varPrefix+BDTshape,
-                                distRange=self.distRange=[0,1], nBins=self.Bins,
+            cuts = self.htCut+self.ldpCut+self.hpfCaloCut+self.blindCut
+            hQCD = RA2b.getDist(Q1, self.varPrefix+BDTshape,
+                                distRange=self.distRange, nBins=self.Bins,
                                 extraCuts=str(cuts), applyMHTCut=self.mhtCut)
+
+            hTop = RA2b.getDist(Q2, self.varPrefix+BDTshape,
+                                distRange=self.distRange, nBins=self.Bins,
+                                extraCuts=str(cuts), applyMHTCut=self.mhtCut)
+            hQCD.Add(hTop)
+
+            hQCD.Multiply(self.qcdPurDict[BDTshape][0])# bkg pur dict is eff
+
+            ## SL LDP contamination
+            hSLLDP = RA2b.getDist(X1, self.varPrefix+BDTshape,
+                                  distRange=self.distRange, nBins=self.Bins,
+                                  extraCuts=str(cuts), applyMHTCut=self.mhtCut,
+                                  applyEffs=True)
+            hSLLDP_ = RA2b.getDist(X2, self.varPrefix+BDTshape,
+                                   distRange=self.distRange, nBins=self.Bins,
+                                   extraCuts=str(cuts), 
+                                   applyMHTCut=self.mhtCut,applyEffs=True)
+            hSLLDP.Add(hSLLDP_)
+
+            # get number of CR events for contamination constraint
+            nSLLDP = float(hSLLDP.Integral())
 
             ## Correct the shape for HDL/LDP differences
             if doCorrQCD:
                 if BDTshape not in self.qcdCorrHist.keys():
-                    self.qcdCorrHist = getCorrHistQCD()
+                    self.setCorrHistQCD()
                 hQCD.Multiply(self.qcdCorrHist[BDTshape])
+
+            # get number of CR events for contamination constraint
+            nQCDCR = float(hQCD.Integral())
+
 
             ## range of fit
             fitRange_min = self.distRange[0]
@@ -454,38 +761,68 @@ class analyzer(object):
                                    hData.GetXaxis().GetTitle(),
                                    fitRange_min,fitRange_max)
             ntopW  = ROOT.RooRealVar("topW",
-                                     "estimated number of events 
-                                     in the top+W backgrounds",
-                                     ndata*2./3., 0.000001, ndata)
+                                     "estimated number of top+W events",
+                                     ndata*4./9., 0.000001, ndata)
             nqcd  = ROOT.RooRealVar("nqcd",
-                                    "estimated number of events 
-                                    in the QCD background",
-                                    ndata*1./3., 0.000001, ndata)
+                                    "estimated number of QCD events",
+                                    ndata*4./9., 0.000001, ndata)
+            ncontam = ROOT.RooRealVar("ncontam",
+                                    "top+W contamination in QCD events",
+                                    ndata*1./9., 0.000001, ndata)
+
+            SLLDP_factor = ROOT.RooFormulaVar("LDP_factor",
+                                              "factor applied to SLLDP",
+                                              "@0*@1*"+
+                                              str(nSLLDP/(nSLHDP*nQCDCR)),
+                                              ROOT.RooArgList(nqcd,ntopW))
+
             ## define ROO data histograms
             data     = ROOT.RooDataHist("data",
                                         "data in signal region" , 
                                         ROOT.RooArgList(varX), hData)
-            topW     = ROOT.RooDataHist("topW_shape",
-                                        "signal and other MC backgrounds
-                                        in signal region", 
+            topW     = ROOT.RooDataHist("topW_",
+                                        "signal and other MC backgrounds", 
                                         ROOT.RooArgList(varX), hTopW)
-            qcd      = ROOT.RooDataHist("qcd_shape",
+            qcd      = ROOT.RooDataHist("qcd_",
                                         "QCD distribution from control region", 
                                         ROOT.RooArgList(varX), hQCD)
+            SLLDP    = ROOT.RooDataHist("SLLDP_",
+                                        "SL LDP distribution",
+                                        ROOT.RooArgList(varX), hSLLDP)
+
+            contam      = ROOT.RooDataHist("contam_",
+                                        "top+W contam in QCD control region", 
+                                           ROOT.RooArgList(varX), hSLLDP)
+ 
             ## ROO PDFs (template hists from control regions)
             topW_model = ROOT.RooHistPdf("topW_model",
-                                         "RooFit template for signal
-                                         and other MC backgrounds", 
+                                         "RooFit template for signal", 
                                          ROOT.RooArgSet(varX), topW)
             qcd_model = ROOT.RooHistPdf("qcd_model",
                                         "RooFit template for QCD backgrounds", 
                                         ROOT.RooArgSet(varX), qcd)
+            SLLDP_model = ROOT.RooHistPdf("SLLDP_model",
+                                          "RooFit template for SLLDP contam",
+                                          ROOT.RooArgSet(varX), SLLDP)
+
+            contam_model = ROOT.RooHistPdf("contam_model",
+                                           "RooFit template for top+W contam",
+                                           ROOT.RooArgSet(varX), contam)
+            
 
             # Prepare extended likelihood fits
             topW_shape = ROOT.RooExtendPdf("topW_shape", "topW shape pdf",
                                            topW_model, ntopW)
             qcd_shape = ROOT.RooExtendPdf("qcd_shape","QCD shape pdf",
                                           qcd_model, nqcd)
+            contam_shape = ROOT.RooExtendPdf("contam_shape","contam shape pdf",
+                                          contam_model, ncontam)
+            SLLDP_shape = ROOT.RooExtendPdf("SLLDP_shape","SLLDP shape pdf",
+                                            SLLDP_model, SLLDP_factor)
+            qcd_sub =  ROOT.RooAddPdf("qcd_sub",
+                                      "top+W subtracted qcd model",
+                                      ROOT.RooArgList(qcd_shape,SLLDP_shape))
+
 
             # Combine the models
             combModel = ROOT.RooAddPdf("combModel",
@@ -498,12 +835,12 @@ class analyzer(object):
                                         ROOT.RooFit.Save(True), 
                                         ROOT.RooFit.Minos(True),
                                         ROOT.RooFit.PrintLevel(-1))
-
+            
             ################
             ## Begin plot fit
             xframe = varX.frame()
-            data.plotOn(xframe)
-            combModel.plotOn(xframe, ROOT.RooFit.VisualizeError(fitResult))
+            data.plotOn(xframe,)
+            combModel.plotOn(xframe)
             data.plotOn(xframe) # plot again so that it is on top of the errors
             combModel.plotOn(xframe, ROOT.RooFit.LineColor(ROOT.kBlack))
             combModel.plotOn(xframe, ROOT.RooFit.Components("topW_shape"), 
@@ -519,27 +856,20 @@ class analyzer(object):
             ## End plot fit
             ################
 
-            ## append list of normalization values and errors
-            nqcdList.append((nqcd.getVal(),nqcd.getError()))
-            ntopWList.append((ntopW.getVal(),ntopW.getError()))
+            ## compute normalization factors
+            varX.setRange("all",0,1)
+            
+            qcdIntegral = qcd_sub.createIntegral(
+                ROOT.RooArgSet(ROOT.RooArgList(varX)),"all").getVal()
+            topIntegral = topW_shape.createIntegral(
+                ROOT.RooArgSet(ROOT.RooArgList(varX)),"all").getVal()
+            normPresFactor = float(ndata)/(qcdIntegral+topIntegral)
+            qcdIntegral*=normPresFactor
+            topIntegral*=normPresFactor
 
-        ## compute average norm with up and down systs
-        nqcdAve = sum(nqcdList)/len(nqcdList)
-        ntopAve = sum(ntopList)/len(ntopList)
-
-        nqcdUpSyst = (max(nqcdList)[0]-nqcdAve)/nqcdAve
-        nqcdDnSyst = (nqcdAve-min(nqcdList)[0])/nqcdAve
-        nqcdUpSyst = math.sqrt(nqcdUpSyst**2+(max(nqcdList)[1]/nqcdAve)**2)
-        nqcdDnSyst = math.sqrt(nqcdDnSyst**2+(min(nqcdList)[1]/nqcdAve)**2)
-
-        ntopWUpSyst = (max(ntopWList)[0]-ntopWAve)/ntopWAve
-        ntopWDnSyst = (ntopWAve-min(ntopWList)[0])/ntopWAve
-        ntopWUpSyst = math.sqrt(ntopWUpSyst**2+(max(ntopWList)[1]/ntopWAve)**2)
-        ntopWDnSyst = math.sqrt(ntopWDnSyst**2+(min(ntopWList)[1]/ntopWAve)**2)
-    
-        ## set the norm dict class variable
-        self.Norm['QCD'] = (nqcdAve,nqcdUpSyst,nqcdDnSyst)
-        self.Norm['TopW'] = (ntopWAve,ntopWUpSyst,ntopWDnSyst)
+            ## set the norm dict class variable
+            self.Norm['QCD'] = (nqcd.getVal(),nqcd.getError(),nQCDTrue)
+            self.Norm['TopW'] = (ntopW.getVal(),ntopW.getError(),nTopWTrue)
 
             
     def aveBins(self, hist, binList):
@@ -620,200 +950,332 @@ class analyzer(object):
 
     def setPred(self, doCorrQCD=True, setWeight=-1):
 
-        ## use setWeight>=0 to get perturbed
-        ## distributions for finding shape syst
-        systWeight = None
-        if(setWeight>-0.5):
-            systWeight='systWeight['+str(setWeight)+']'
+        Q1 = 'qcdIDP'
+        Q2 = 'topWIDP'
+        L1 = 'topWsleIDP'
+        L2 = 'topWslmIDP'
+
+        if self.doData:
+            Q1 = 'sigLDP'
+            Q2 = 'sig'
+            L1 = 'sleIDP'
+            L2 = 'slmIDP'
             
+        BDTshape = 'Sig[0]'
+
         ## get top/W and QCD predictions
-        for BDTshape in BDTshapes:
+        if 'TopW' not in self.Norm.keys():
+            self.setNormFromFit()
+        ## QCD prediction fom LDP control region
+        cuts = self.htCut+self.ldpCut+self.hpfCaloCut
+        histQCD = RA2b.getDist(Q1,self.varPrefix+BDTshape,
+                               distRange=self.distRange,
+                               nBins=self.Bins,extraCuts=str(cuts))
+        histQCD2 = RA2b.getDist(Q2,self.varPrefix+BDTshape,
+                               distRange=self.distRange,
+                               nBins=self.Bins,extraCuts=str(cuts))
+        histQCD.Add(histQCD2)
+        if 'Sig[0]' not in self.qcdCorrHist.keys():
+            self.setCorrHistQCD()
+        histQCD.Multiply(self.qcdCorrHist['Sig[0]'])
+        histQCD.Add(self.qcdPurDict['Sig[0]'][0],-1) ## sig pur dict is not eff
+
+        ## Top/W prediction from SLe and SLm control region
+        cuts = self.htCut+self.hdpCut+self.hpfCaloCut
+        histL = RA2b.getDist(L1, self.varPrefix+BDTshape,
+                            distRange=self.distRange,applyEffs=True,
+                            nBins=self.Bins,extraCuts=str(cuts))
+        histL.Add(RA2b.getDist(L2, self.varPrefix+BDTshape,
+                              distRange=self.distRange,applyEffs=True,
+                              nBins=self.Bins,extraCuts=str(cuts)))
+                 
+        ## Get unblind normalization and scale to 
+        ## normalization gotten from Norm dict
+        normQCD=0
+        normL=0
+        for i in range(1,self.Bins-self.nSigBins+1):             
+            normQCD += histQCD.GetBinContent(i)
+            normL += histL.GetBinContent(i)
+        histQCD.Scale(self.Norm['QCD'][0]/normQCD)
+        histL.Scale(self.Norm['TopW'][0]/normL)
+
+        ## Get non-closure multiplicative factor for top+W ~20%
+        fTop = ROOT.TFile.Open('topSystHistsMC.root','read')
+        nonClosureFactor = fTop.Get('nonClosureFactor')
+        histL.Multiply(nonClosureFactor)
+
+        ## Get non-closure multiplicative factor for QCD ~20%
+        fQCD = ROOT.TFile.Open('qcdSystHists.root','read')
+        nonClosureFactorQCD = fQCD.Get('nonClosureFactorQCD')
+        histQCD.Multiply(nonClosureFactorQCD)
+
+        ## store in prediction dictionary
+        self.predDict['QCD'] = histQCD
+        self.predDict['TopW'] = histL
             
-            ## skip 'Sig' since 'Sig' is not a background
-            if BDTshape == 'Sig':
-                continue
-            ## check to see if Norm has been computed yet
-            elif BDTshape not in self.Norm.keys():
-                setNormFromFit()
-            ## QCD prediction fom LDP control region
-            elif BDTshape == 'QCD':
-                cuts = htCut+ldpCut+hpfCaloCut
-                hist = RA2b.getDist('sigIDP',
-                                    self.varPrefix+BDTshape,
-                                    distRange=self.distRange,
-                                    nBins=self.Bins,extraCuts=str(cuts),
-                                    extraWeight=systWeight)
-                if doCorrQCD:
-                    if 'Sig' not in self.qcdCorrHist.keys():
-                        self.qcdCorrHist = getCorrHistQCD()
-                    hist.Multiply(self.qcdCorrHist['Sig'])
-                    
-            ## Top/W prediction from SLe and SLm control region
-            elif BDTshape == 'TopW':
-                cuts = htCut+ldpCut+hpfCaloCut
-                hist = RA2b.getDist('slmIDP',
-                                    self.varPrefix+BDTshape,
-                                    distRange=self.distRange,
-                                    nBins=self.Bins,extraCuts=str(cuts),
-                                    extraWeight=systWeight)
-                hist.Add(RA2b.getDist('sleIDP',
-                                      self.varPrefix+BDTshape,
-                                      distRange=self.distRange,
-                                      nBins=self.Bins,extraCuts=str(cuts),
-                                      extraWeight=systWeight))
-                
-            ## Get unblind normalization and scale to 
-            ## normalization gotten from Norm dict
-            nCR = 0.
-            for i in range(1,self.Bins-self.nSigBins+1):             
-                nCR += hist.GetBinContent(i)
-            hist.Scale(self.Norm[BDTshape][0]/nCR)
-                         
-            ## smooth if configured to do so
-            if self.doSmoothDict[BDTshape]:
-                hist = smooth(hist)
-                         
-            ## store in prediction dictionary
-            self.predDict[BDTshape] = hist
-                         
+        ## opened external file so we need to change the
+        ## working directory back to 0
+        for Key in self.predDict.keys():
+            self.predDict[Key].SetDirectory(0)
+             
 
-    def getStatHist(self, hist, histEffs=None):
+    def getStatHist(self, sampleName):
 
-        ## stat hist, clone 
-        hStat = hist.Clone()
-        
-        ## if there is variable efficiency factors applied
-        ## then we'll need the transfer histogram to account
-        ## for the correct efficiencies
-        if(histEffs==None):
-            hTF = hist.Clone()
+        cuts = self.htCut+self.hpfCaloCut
+        if 'QCD' in sampleName:
+            cuts+=self.ldpCut
         else:
-            hTF = histEffs.Clone()
+            cuts+=self.hdpCut
+            
+        ## dictionary to determine appropriate dataset from sampleName
 
-        ## Set hStat as number of absolute events
-        for binInter in range(1,self.Bins+1):
-            binEntries = (hist.GetEntries()*
-                          hist.GetBinContent(binIter)/
-                          hist.Integral())
-            hStat.SetBinContent(binIter, binEntries)
+        mcSampleDict = {'QCD':  ['qcdIDP'],
+                        'TopW': ['topWsleIDP','topWslmIDP'],
+                        'Zinv': ['gjetsIDP']}
+        dataSampleDict = {'QCD':  ['sigIDP'],
+                          'TopW': ['sleIDP','slmIDP'],
+                          'Zinv': ['photonIDP']}
+                        
+        DS = mcSampleDict[sampleName]
+        if self.doData:
+            DS = dataSampleDict[sampleName]
+        
+        ## no efficiencies or weights applied
+        hStat = RA2b.getDist(DS[0], self.varPrefix+'Sig[0]',
+                             distRange=self.distRange, nBins=self.Bins,
+                             extraCuts=str(cuts),setWeight=1.)
+        ## add second if there
+        if len(DS)>1:
+            hStat2 = RA2b.getDist(DS[1], self.varPrefix+'Sig[0]',
+                                  distRange=self.distRange, nBins=self.Bins,
+                                  extraCuts=str(cuts),setWeight=1.)
 
-        hTF.Divide(hStat)
+            hStat.Add(hStat2)
 
-        return [hStat,hTF]
+        return hStat
 
-    def setSystHists(self):
+    def getNormSystHist(self, bkg):
 
-        dataFlag = ''
-        if(doData==True):
-            dataFlag = 'Data'
+        ## set normalization error
+        normSystHist = self.predDict[bkg].Clone()
+        for binIter in range(1,self.Bins+1):
+            normSystHist.SetBinContent(binIter,1+
+                                       self.Norm[bkg][1]/self.Norm[bkg][0])
+            normSystHist.SetBinError(binIter,0)
 
-        ## 1% QCD purity uncertainty, 3% topW purity uncertainty
-        purDict = {'QCD': 0.01, 'TopW': 0.03}
+        return normSystHist
+
+    def getStatSystHists(self, bkg):
+
+        TFhist = self.predDict[bkg].Clone()            
+
+        ## combine takes hist with N(data events)
+        ## for statistical uncertainty
+        statHist = self.getStatHist(bkg)
+        ## transfer factor histogram
+        TFhist.Divide(statHist)
+        
+        return [statHist, TFhist]
+
+    def setSystHistsTopW(self):
+
+        ## check if need to run prediction first
+        if 'TopW' not in self.predDict.keys():
+            self.setPred()
 
         ## get shape syst file 
         ## from running shape systematic study
-        fShapeSyst = ROOT.TFile.Open(
-            'hists/shapeSyst'+dataFlag+'.root','read')
-        
-        ## loop over background predictions
-        for bkg in self.predDict.keys():
+        if self.doData:
+            fTop = ROOT.TFile.Open('topSystHistsData.root','read')
+        else:
+            fTop = ROOT.TFile.Open('topSystHistsMC.root','read')
 
-            ## case change between key and 
-            ## file name
-            lowerbkg = bkg[:3].lower()+bkg[3:]
-            ## get stored shape systs
-            upShapeHist = fShapeSyst.Get(lowerbkg+'SystUp'+dataFlag)
-            dnShapeHist = fShapeSyst.Get(lowerbkg+'SystDn'+dataFlag)
+        ## take 50% uncertainty on non closure multiplicative factor
+        nonClosureFactor = fTop.Get('nonClosureFactor')
+        nonClosureFactorSyst = nonClosureFactor.Clone()
+        for binIter in range(1,nonClosureFactorSyst.GetNbinsX()+1):
+            nonClosureFactorSyst.SetBinContent(
+                binIter,(nonClosureFactorSyst.GetBinContent(binIter)-1)*0.5+1)
 
-            ## upper and lower norm uncertainties (float fraction error)
-            normUpsyst = self.Norm[bkg][1]
-            normDnSyst = self.Norm[bkg][2]
+        ## top systs
+        self.systDictTopW['IsoSystHist'] = [
+            fTop.Get('UpIsoSystHist'), 
+            fTop.Get('DnIsoSystHist')]
+        self.systDictTopW['MTWSystHist'] = [
+            fTop.Get('UpMTWSystHist'),
+            fTop.Get('DnMTWSystHist')]
+        self.systDictTopW['PuritySystHist'] = [
+            fTop.Get('UpPuritySystHist'), 
+            fTop.Get('DnPuritySystHist')]
+        self.systDictTopW['MuIsoSystHist'] = [
+            fTop.Get('UpMuIsoSystHist'),
+            fTop.Get('DnMuIsoSystHist')]
+        self.systDictTopW['MuRecoSystHist'] = [
+            fTop.Get('UpMuRecoSystHist'),
+            fTop.Get('DnMuRecoSystHist')]
+        self.systDictTopW['ElecIsoSystHist'] = [
+            fTop.Get('UpElecIsoSystHist'),
+            fTop.Get('DnElecIsoSystHist')]
+        self.systDictTopW['ElecRecoSystHist'] = [
+            fTop.Get('UpElecRecoSystHist'),
+            fTop.Get('DnElecRecoSystHist')]
+        self.systDictTopW['DiLepContributionSystHist'] = [
+            fTop.Get('UpDiLepContributionSystHist'),
+            fTop.Get('DnDiLepContributionSystHist')]
+        self.systDictTopW['TopWLepAccSystHist'] = [
+            fTop.Get('UpLepAccSystHist'),
+            fTop.Get('DnLepAccSystHist')]
+        self.systDictTopW['TopWHadTauNonClosure'] = [
+            fTop.Get('hadTauClosure')]
+        self.systDictTopW['nonClosure'] = [nonClosureFactorSyst]
 
-            ## clone predDict to get consistent binning
-            ## structure for uncertainty histograms
-            upsystSmooth = self.predDict[bkg].Clone()
-            dnsystSmooth = self.predDict[bkg].Clone()
-            dnsystSmoothTemp = self.predDict[bkg].Clone()
-            purSystHist = self.predDict[bkg].Clone()
-            upNormHist = self.predDict[bkg].Clone()
-            dnNormHist = self.predDict[bkg].Clone()
-            TFhist = self.predDict[bkg].Clone()            
 
-            ## combine takes hist with N(data events)
-            ## for statistical uncertainty
-            statHist = getStatHist(self.predDict[bkg])[0]
-            ## transfer factor histogram
-            TFhist.Divide(statHist)
-
-            ## if smoothing is being applied then
-            ## fill smoothing histograms
-            if doSmoothDict[bkg]:
-                smoothNorm = {bkg: Norm[bkg]}
-                smoothDict = {bkg: False}
-                noSmoothPred = setPred(smoothNorm,smoothDict)
-                S0 = noSmoothPred[bkg]
-                S1 = smooth(S0)
-                S2 = smooth(S1)
-                SStat = smooth(S0, True)
-                statHist = SStat.Clone()
-                for sIter in range(1,upsystSmooth.GetNbinsX()+1):
-                    s0 = S0.GetBinContent(sIter)
-                    s1 = S1.GetBinContent(sIter)
-                    s2 = S2.GetBinContent(sIter)
-                    upsystSmooth.SetBinContent(sIter,max(s0,s1,s2))
-                    dnsystSmoothTemp.SetBinContent(sIter,min(s0,s1,s2))
-            upsystSmooth.Add(predHists[bkg],-1)
-            dnsystSmooth.Add(dnsystSmoothTemp,-1)
-            upsystSmooth.Divide(predHists[bkg])
-            dnsystSmooth.Divide(predHists[bkg])
-
-            ## fill purity and Norm syst histograms
-            for binIter in range(1,self.Bins+1):
-                purSystHist.SetBinContent(binIter, purDict[bkg])
-                upNormHist.SetBinContent(binIter,normUpSyst)
-                dnNormHist.SetBinContent(binIter,normDnSyst)
-
-            ## store in syst uncertainty dictionary
-            self.systDict['NCR'+bkg] = [statHist,TFhist]
-            self.systDict[bkg+'Norm'] = [upNormHist, dnNormHist]
-            self.systDict[bkg+'Shape'] = [upShapeHist, dnShapeHist]
-            self.systDict[bkg+'Pur'] = [purSystHist]
-            if self.doSmoothDict[bkg]:
-                self.systDict[bkg+'Smooth'] = [upsystSmooth, dnsystSmooth]
+        ## Norm and NStat uncertainties 
+        self.systDictTopW['NCR'] = self.getStatSystHists('TopW')
+        self.systDictTopW['Norm'] = [self.getNormSystHist('TopW')]
 
         ## opened external file so we need to change the
         ## working directory back to 0
-        for Key in self.systDict:
-            for hist in systDict[Key]:
+        for Key in self.systDictTopW:
+            for hist in self.systDictTopW[Key]:
                 hist.SetDirectory(0)
 
+    def setSystHistsQCD(self):
 
-    def getSignalHistogram(self, sample, doSF=0, doISR=True, 
-                           extraWeight=None, applyEffs=True,
-                           JEtype='', applyISRWeight=True,
-                           extraCuts=None, applyTrigWeight='cv'):
+        ## check if need to run prediction first
+        if 'QCD' not in self.predDict.keys():
+            self.setPred()
+
+        dataSample = 'qcdIDP'
+        if self.doData:
+            dataSample = 'sigIDP'
+
+        fQCD = ROOT.TFile.Open('qcdSystHists.root','read')
+            
+        ## take 50% uncertainty on non closure multiplicative factor
+        nonClosureFactor = fQCD.Get('nonClosureFactorQCD')
+        nonClosureFactorSyst = nonClosureFactor.Clone()
+        for binIter in range(1,nonClosureFactorSyst.GetNbinsX()+1):
+            nonClosureFactorSyst.SetBinContent(
+                binIter,(nonClosureFactorSyst.GetBinContent(binIter)-1)*0.5+1)
+
+        ## QCD double ratio
+        cuts = self.htCut+self.hdpCut+self.lpfCaloCut
+        qcdDataNum = RA2b.getDist(dataSample,self.varPrefix+'Sig[0]',
+                                  distRange=self.distRange,nBins=self.BinsDR,
+                                  extraCuts=str(cuts))
+        qcdSimNum = RA2b.getDist('qcdIDP',self.varPrefix+'Sig[0]',
+                                  distRange=self.distRange,nBins=self.BinsDR,
+                                  extraCuts=str(cuts))
+
+        cuts = self.htCut+self.ldpCut+self.lpfCaloCut
+        qcdDataDen = RA2b.getDist(dataSample,self.varPrefix+'Sig[0]',
+                                  distRange=self.distRange,nBins=self.BinsDR,
+                                  extraCuts=str(cuts))
+        qcdSimDen = RA2b.getDist('qcdIDP',self.varPrefix+'Sig[0]',
+                                  distRange=self.distRange,nBins=self.BinsDR,
+                                  extraCuts=str(cuts))
+
+        dataRatio = qcdDataNum.Clone()
+        dataRatio.Divide(qcdDataDen)
+        
+        simRatio = qcdSimNum.Clone()
+        simRatio.Divide(qcdSimDen)
+
+        doubleRatio = dataRatio.Clone()
+        doubleRatio.Divide(simRatio)
+
+        drGraph = ROOT.TGraphErrors(doubleRatio)
+        Qdr = RA2b.getDoubleRatioPlot([drGraph],isQCD=True)
+
+        drUpSyst = self.predDict['QCD'].Clone()
+        drDnSyst = self.predDict['QCD'].Clone()
+        for binIter in range(1,self.Bins+1):
+            drUpSyst.SetBinContent(binIter,1.+Qdr[1]['Sig[0]'][binIter-1][0])
+            drDnSyst.SetBinContent(binIter,1.-Qdr[1]['Sig[0]'][binIter-1][1])
+        self.systDictQCD['dr'] = [drUpSyst,drDnSyst]
+        
+        ## MC stat from HDP/LDP correction hist
+        corrStat = self.qcdCorrHist['Sig[0]'].Clone()
+        for binIter in range(1,self.Bins+1):
+            corrStat.SetBinContent(binIter,
+                            1+self.qcdCorrHist['Sig[0]'].GetBinError(binIter))
+            corrStat.SetBinError(binIter,0)
+        self.systDictQCD['mcStat'] = [corrStat]
+
+        ## btag SFs
+        btagUpSyst = self.predDict['QCD'].Clone()
+        btagDnSyst = self.predDict['QCD'].Clone()
+        for binIter in range(1,self.Bins+1):
+            bMax = max(self.qcdCorrHist['Sig[0]'].GetBinContent(binIter),
+                       self.qcdCorrHist['Sig[1]'].GetBinContent(binIter),
+                       self.qcdCorrHist['Sig[2]'].GetBinContent(binIter))
+            bMin = min(self.qcdCorrHist['Sig[0]'].GetBinContent(binIter),
+                       self.qcdCorrHist['Sig[1]'].GetBinContent(binIter),
+                       self.qcdCorrHist['Sig[2]'].GetBinContent(binIter))
+            upSyst = bMax-self.qcdCorrHist['Sig[0]'].GetBinContent(binIter)
+            upSyst*=1./self.qcdCorrHist['Sig[0]'].GetBinContent(binIter)
+            upSyst+=1.
+            dnSyst = bMin-self.qcdCorrHist['Sig[0]'].GetBinContent(binIter)
+            dnSyst*=1./self.qcdCorrHist['Sig[0]'].GetBinContent(binIter)
+            dnSyst+=1.
+
+            btagUpSyst.SetBinContent(binIter,upSyst)
+            btagUpSyst.SetBinError(binIter,0)
+            btagDnSyst.SetBinContent(binIter,dnSyst)
+            btagDnSyst.SetBinError(binIter,0)
+        self.systDictQCD['btag'] = [btagUpSyst,btagDnSyst]
+
+        ## Contamination symmetric uncert
+        purSyst = self.predDict['QCD'].Clone()
+        contam = self.qcdPurDict['Sig[0]'][0].Clone()
+        ## add back half of contamination
+        contam.Scale(0.5)
+        purSyst.Add(contam)
+
+        purSyst.Add(self.predDict['QCD'],-1)
+        purSyst.Divide(self.predDict['QCD'])
+        for binIter in range(1,self.Bins+1):
+            purSyst.SetBinContent(binIter,1.+purSyst.GetBinContent(binIter))
+            purSyst.SetBinError(binIter,0)
+        self.systDictQCD['purity'] = [purSyst]
+
+        ## Norm and NStat uncertainties 
+        self.systDictQCD['NCR'] = self.getStatSystHists('QCD')
+        self.systDictQCD['Norm'] = [self.getNormSystHist('QCD')]
+
+        ## opened external file so we need to change the
+        ## working directory back to 0
+        for Key in self.systDictQCD:
+            for hist in self.systDictQCD[Key]:
+                hist.SetDirectory(0)
+        
+    def getSignalHistogram(self, sample, doSF=0, doISR=True,
+                           extraWeight='TrigWeight', applyEffs=True,
+                           JE='', extraCuts=None, cuts=None):
 
         ## if doSF<0, then do not apply btag SFs
         sampleSuffix = ''
         ## doSF==0 means apply btag SF central values
         ## doSF>0 means apply btag SF variations
         if doSF>=0:
-            sampleSuffix = 'SF['doSF']'
+            sampleSuffix = '['+str(doSF)+']'
 
-        hist = RA2b.getDist(sample+JEtype,
+        if cuts==None:
+            cuts = str(self.htCut+self.hdpCut+self.hpfCaloCut)
+
+        hist = RA2b.getDist(sample+JE,
                             self.varPrefix+'Sig'+sampleSuffix,
                             extraCuts=str(cuts), distRange=self.distRange,
-                            nBins=self.Bin, applyISRWeight=doISR,
-                            extraWeight=extraWeight, applyEffs=applyEffs,
-                            extraCuts=extraCuts, 
-                            applyTrigWeight=applyTrigWeight)
+                            nBins=self.Bins, applyISRWeight=doISR,
+                            extraWeight=extraWeight, applyEffs=applyEffs)
         return hist
 
     def setSignalHistogram(self, sample):
 
-        self.signalHist = getSignalHistogram(sample)
+        self.signalHist = self.getSignalHistogram(sample)
 
-    def getSystFromVarHists(UP,DN,CV=None):
+    def getSystFromVarHists(self,UP,DN,CV=None):
 
         ## If no central value histogram is given,
         ## use average of up and down syst hists
@@ -836,8 +1298,11 @@ class analyzer(object):
             ## as upper and lower systematics. If CV is zero then
             ## uncertainties will default to zero (CV)
             if(cv>0):
-                upSyst.SetBinContent(binIter,(max(cv,up,dn)-cv)/cv)
-                dnSyst.SetBinContent(binIter,(cv-min(cv,up,dn))/cv)
+                upSyst.SetBinContent(binIter,1+(max(cv,up,dn)-cv)/cv)
+                dnSyst.SetBinContent(binIter,1-(cv-min(cv,up,dn))/cv)
+            else:
+                upSyst.SetBinContent(binIter,1)
+                dnSyst.SetBinContent(binIter,1)
 
         return [upSyst,dnSyst]
 
@@ -849,8 +1314,6 @@ class analyzer(object):
             suffix = 'Signal'
         else:
             suffix = 'Zinv'
-
-        cuts = self.hdpCut+self.htCut+self.hpfCaloCut
 
         ## histogram array index dictionary
         ## format: [upperSyst,lowerSyst]
@@ -865,34 +1328,37 @@ class analyzer(object):
 
         ## first get b-tag SF central value for comparison
         if sample not in self.signalHist.GetName():
-            setSignalHistogram(sample)
+            self.setSignalHistogram(sample)
             
         ## loop over each systematic from the indexDict
         for syst in indexDict:
             ## need temp list to store variation histograms
             tmpHistList = []
             for variation in indexDict[syst]:
-                tmpHistList.append(getSignalHistogram(sample, doSF=variation))
+                tmpHistList.append(self.getSignalHistogram(sample, 
+                                                           doSF=variation))
                     
-            self.sigSystDict[syst] = getSystFromVarHists(tmpHistList[0],
-                                                         tmpHistList[1],
-                                                         self.signalHist)
+            self.sigSystDict[syst] = self.getSystFromVarHists(tmpHistList[0],
+                                                              tmpHistList[1],
+                                                              self.signalHist)
                 
     def setScaleSystHists(self, sample):
 
 
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
-            setSignalHistogram(sample)
+            self.setSignalHistogram(sample)
 
 
         ## Eight different renomralization and factorization scale variations
+        scaleHists = []
         for scaleIter in range(8):
             scaleHists.append(
-                getSignalHistogram(sample,extraWeight='ScaleWeights'
-                                   '['+str(scaleIter)+']'))
+                self.getSignalHistogram(sample,
+                                        extraWeight='(TrigWeight*ScaleWeights'
+                                   '['+str(scaleIter)+'])'))
             ## normalize to remove unphysical normalization differences
-            scaleHists[i].Scale(
+            scaleHists[scaleIter].Scale(
                 self.signalHist.Integral()/scaleHists[scaleIter].Integral())
 
         ## clone signalHist to ensure consistent binning
@@ -907,22 +1373,22 @@ class analyzer(object):
             varUpHist.SetBinContent(binIter,max(binList))
             varDnHist.SetBinContent(binIter,min(binList))
 
-        self.sigSystDict['ScaleSignal'] = getSystFromVarHists(varUpHist,
-                                                              varDnHist,
-                                                              self.signalHist)
+        self.sigSystDict['ScaleSignal'] = self.getSystFromVarHists(varUpHist,
+                                                            varDnHist,
+                                                            self.signalHist)
     def setISRSystHists(self, sample):
 
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
-            setSignalHistogram(sample)
+            self.setSignalHistogram(sample)
         
         ## get histograms with up and down ISR weights applied
-        varUpHist = getSignalHistogram(sample, applyISRweight=False, 
-                                       extraWeight='ISRup')
-        varDnHist = getSignalHistogram(sample, applyISRweight=False, 
-                                       extraWeight='ISRdn')
+        varUpHist = self.getSignalHistogram(sample, doISR=False, 
+                                            extraWeight='(TrigWeight*ISRup)')
+        varDnHist = self.getSignalHistogram(sample, doISR=False, 
+                                            extraWeight='(TrigWeight*ISRdn)')
 
-        self.sigSystDict['ISRSignal'] = getSystFromVarHists(varUpHist,
+        self.sigSystDict['ISRSignal'] = self.getSystFromVarHists(varUpHist,
                                                             varDnHist,
                                                             self.signalHist)
 
@@ -930,15 +1396,15 @@ class analyzer(object):
 
         ## first set central value for comparison
         if sample not in self.signalHist.GetName():
-            setSignalHistogram(sample)
+            self.setSignalHistogram(sample)
 
         ## get up and down variations
-        varUpHist = getSignalHistogram(sample, applyTrigWeight='up')
-        varDnHist = getSignalHistogram(sample, applyTrigWeight='dn')
+        varUpHist = self.getSignalHistogram(sample, extraWeight='TrigWeightUp')
+        varDnHist = self.getSignalHistogram(sample, extraWeight='TrigWeightDn')
 
-        self.sigSystDict['Trig'] =  = getSystFromVarHists(varUpHist,
-                                                          varDnHist,
-                                                          self.signalHist)
+        self.sigSystDict['Trig'] =  self.getSystFromVarHists(varUpHist,
+                                                             varDnHist,
+                                                             self.signalHist)
 
     def setJetEnergySystHists(self, sample, JEtype):
         """
@@ -948,18 +1414,12 @@ class analyzer(object):
         """
 
         ## get up and down variations
-        varUpHist = getSignalHistogram(sample, JEtype=JEtype+'up', doSF=-1,
-                                       doISR=False, applyEffs=False,
-                                       applyISRWeight=False, 
-                                       applyTrigWeight=False)
-        varDnHist = getSignalHistogram(sample, JEtype=JEtype+'down', doSF=-1,
-                                       doISR=False, applyEffs=False,
-                                       applyISRWeight=False, 
-                                       applyTrigWeight=False)
+        varUpHist = self.getSignalHistogram(sample, JE=JEtype+'up')
+        varDnHist = self.getSignalHistogram(sample, JE=JEtype+'down')
 
-        ## set JE syst using average as CV
-        self.sigSystDict[JEtype] = getSystFromVarHists(varUpHist,
-                                                       varDnHist)
+        ## set JE syst using average as CV (only have "signal" trees)
+        self.sigSystDict[JEtype] = self.getSystFromVarHists(varUpHist,
+                                                            varDnHist)
 
     def setJetIDSystHist(self):
 
@@ -971,9 +1431,9 @@ class analyzer(object):
 
         ## fill the histogram
         for i in range(1,self.Bins+1):
-            systHist.SetBinContent(i,idError)
+            systHist.SetBinContent(i,1+idError)
 
-        self.sigSystDict['JetIDSignal'] = systHist
+        self.sigSystDict['JetIDSignal'] = [systHist]
 
     def setLumiSystHist(self):
 
@@ -985,11 +1445,43 @@ class analyzer(object):
 
         ## fill the histogram
         for i in range(1,self.Bins+1):
-            systHist.SetBinContent(i,lumiError)
+            systHist.SetBinContent(i,1+lumiError)
 
-        self.sigSystDict['LumiSignal'] = systHist
+        self.sigSystDict['LumiSignal'] = [systHist]
 
     def setSignalSystHists(self, sample):
+        """ Set all systematic uncertainties for signal. 
+        List:
+        btagSFs(6), ISR, Trig, JECs, JERs, JetID, Lumi
+        still need PU reweighting
+        """
+
+
+        ## first get b-tag SF central value for comparison
+        if sample not in self.signalHist.GetName():
+            self.setSignalHistogram(sample)
+
+
+        ## btag systematic uncertainties
+        self.setBTagSystHists(sample)
+
+        ## Initial state radiation syst
+        self.setISRSystHists(sample)
+
+        ## Trigger systematic from bayesian neural network
+        self.setTrigSystHists(sample)
+
+        ## Jet energy correction syst
+        self.setJetEnergySystHists(sample,'JEC')
+
+        ## Jet energy resolution syst
+        self.setJetEnergySystHists(sample,'JER')
+
+        ## Fastsim Jet ID syst
+        self.setJetIDSystHist()
+
+        ## Luminosity syst
+        self.setLumiSystHist()
 
     def subtractSignalContamination(self, sample):
         """
@@ -1015,7 +1507,8 @@ class analyzer(object):
         topContam.Scale(sigSidebandNorm/topContam.Integral())
 
         ## QCD contamination
-        qcdContam = getSignalHistogram(sample, extraCuts=str(self.ldpCut))
+        cuts = self.ldpCut+self.htCut+self.hpfCaloCut
+        qcdContam = getSignalHistogram(sample, extraCuts=str(cuts))
                         
         ## Scale qcd contamination by qcd CR scaling
         qcdContam.Multiply(qcdCorrHist['Sig'])
@@ -1035,45 +1528,46 @@ class analyzer(object):
         graph = ROOT.TGraphAsymmErrors(hist)
         
         ## loop over bins to set errors from systDict
-        for binIter in range(hist.GetNbinsX()):
+        for binIter in range(hist.GetNbinsX()+1):
 
             ## add up in quadruature the fractional uncertainties
             upSystTot = 0.
             dnSystTot = 0.
             for systKey in systDict:
-
+                
                 ## stat error is a pure number, 
-                ## using sqrt(N) as uncertainty here
-                if systKey.statswith('N'):
-                    upSystTot = math.sqrt(
-                        upSystTot**2
-                        +1./systDict[systKey][0].GetBinContent(binIter))
-                    dnSystTot = math.sqrt(
-                        dnSystTot**2
-                        +1./systDict[systKey][0].GetBinContent(binIter))
-
+                ## using no.4 from: 
+                ## www-cdf.fnal.gov/physics/statistics/notes/pois_eb.txt
+                if systKey.endswith('NCR'):
+                    upSystTot = math.sqrt(upSystTot**2+((0.5+ROOT.TMath.Sqrt(
+                        systDict[systKey][0].GetBinContent(binIter)+0.25))/max(
+                            systDict[systKey][0].GetBinContent(binIter),1))**2)
+                    dnSystTot = math.sqrt(dnSystTot**2+((-0.5+ROOT.TMath.Sqrt(
+                        systDict[systKey][0].GetBinContent(binIter)+0.25))/max(
+                            systDict[systKey][0].GetBinContent(binIter),1))**2)
                 elif len(systDict[systKey])==1: ## symmetrical systematic
                     upSystTot = math.sqrt(
                         upSystTot**2
-                        +systDict[systKey][0].GetBinContent(binIter)**2)
+                        +(systDict[systKey][0].GetBinContent(binIter)-1)**2)
                     dnSystTot = math.sqrt(
                         dnSystTot**2
-                        +systDict[systKey][0].GetBinContent(binIter)**2)
-                    
+                        +(systDict[systKey][0].GetBinContent(binIter)-1)**2)
+                        
                 else: ## asymmetrical systematic
                     upSystTot = math.sqrt(
                         upSystTot**2
-                        +systDict[systKey][0].GetBinContent(binIter)**2)
+                        +(systDict[systKey][0].GetBinContent(binIter)-1)**2)
                     dnSystTot = math.sqrt(
                         dnSystTot**2
-                        +systDict[systKey][1].GetBinContent(binIter)**2)
-
-            graph.SetPointEYhigh(binIter, upSystTot*hist.GetBinContent(i+1))
-            graph.SetPointEYlow(binIter,  dnSystTot*hist.GetBinContent(i+1))
+                        +(systDict[systKey][1].GetBinContent(binIter)-1)**2)
+                        
+            upVal = hist.GetBinContent(binIter)
+            if upVal==0:
+                upVal=1
+            graph.SetPointEYhigh(binIter-1,upSystTot*upVal)
+            graph.SetPointEYlow(binIter-1,dnSystTot*hist.GetBinContent(binIter))
 
         return graph
-
-    def getPiePlots(self, graphs, rangeList=range(45,50), doSymmetric=True, colorDict=None, doUncert=False, binning=None):
 
     def Round(self, val):
         """
@@ -1098,12 +1592,16 @@ class analyzer(object):
 
     def getLine(self, sampleDict, Key, Bin, spc, doSymmetric):
 
+        return 0
+
     def makeDataCards(self, sample, doSymmetric=True):
+
+        return 0
 
     def makeAllCards(self, sampleClass):
         
         ## Get full list of files available
-        listOfFiles = os.listdir('/media/hdd/work/data/lpcTrees'
+        listOfFiles = os.listdir('/media/hdd/work/data/lpcTrees'+
                                  '/Skims/Run2ProductionV11/scan/tree_signal')
 
         ## convert file name to RA2b readable sample name
