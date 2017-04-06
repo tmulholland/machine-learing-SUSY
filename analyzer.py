@@ -4,6 +4,7 @@ import numpy
 import math
 import os
 import pickle
+import xsec
 
 class analyzer(object):
     """ Main analysis code for my thesis work.
@@ -440,7 +441,7 @@ class analyzer(object):
 
         ## add individual systematic uncertainties to
         ## the dictionary containing the Z systematics
-        self.zSystDict['ZinvNorm'] = [cvUpHist, cvUpHist]
+        self.zSystDict['ZinvNorm'] = [cvUpHist, cvDnHist]
         self.zSystDict['ZinvDR'] = [drUpHist, drDnHist]
         self.zSystDict['ZinvRZGstat'] = [rzgStatHist]
         self.zSystDict['ZinvRZGbtag'] = [rzgUpBtagHist, rzgDnBtagHist]
@@ -498,11 +499,20 @@ class analyzer(object):
             qcdTF2qcd.Divide(qcdDenom)
 
             ## smooth out last bin
-            for binIter in range(self.Bins+1):
-                qcdTF2qcd.SetBinContent(binIter,
-                                        min(2,qcdTF2qcd.GetBinContent(binIter)))
-                qcdTF2qcd.SetBinError(binIter,
-                                      min(1,qcdTF2qcd.GetBinError(binIter)))
+            for binIter in range(1,self.Bins+1):
+                binContent = qcdTF2qcd.GetBinContent(binIter)
+
+                if binContent==0:
+                    binContent=1.
+                if binContent>2:
+                    binContent=1.
+
+                binError = qcdTF2qcd.GetBinError(binIter)
+
+                fracError = min(binError/binContent,0.5)
+
+                qcdTF2qcd.SetBinContent(binIter, binContent)
+                qcdTF2qcd.SetBinError(binIter,fracError*binContent)
 
             ## set correction hists
             self.qcdCorrHist[BDTshape] = qcdTF2qcd
@@ -634,11 +644,13 @@ class analyzer(object):
         data.plotOn(xframe) # plot again so that it is on top of the errors
         combModel.plotOn(xframe, ROOT.RooFit.LineColor(ROOT.kBlack))
         combModel.plotOn(xframe, ROOT.RooFit.Components("qcd_shape"), 
-                         ROOT.RooFit.LineColor(ROOT.kGreen))
+                         ROOT.RooFit.LineColor(16),
+                         ROOT.RooFit.DrawOption("L"))
         combModel.plotOn(xframe, ROOT.RooFit.Components("contam_shape"), 
-                         ROOT.RooFit.LineColor(ROOT.kRed))
-        xframe.GetXaxis().SetTitle(BDTshape+'-like BDT Output')
-        xframe.GetYaxis().SetTitleOffset(1.35)
+                         ROOT.RooFit.LineColor(ROOT.kBlue),  
+                         ROOT.RooFit.DrawOption("L"))
+        xframe.GetXaxis().SetTitle('Top+W-like BDT Output')
+        xframe.GetYaxis().SetTitleOffset(1.1)
         xframe.GetYaxis().SetTitle('Events')
         xframe.SetTitle('')
         xframe.SetMinimum(0)
@@ -902,11 +914,13 @@ class analyzer(object):
             data.plotOn(xframe) # plot again so that it is on top of the errors
             combModel.plotOn(xframe, ROOT.RooFit.LineColor(ROOT.kBlack))
             combModel.plotOn(xframe, ROOT.RooFit.Components("topW_shape"), 
-                             ROOT.RooFit.LineColor(ROOT.kBlue))
+                             ROOT.RooFit.LineColor(ROOT.kBlue),
+                             ROOT.RooFit.DrawOption("L"))
             combModel.plotOn(xframe, ROOT.RooFit.Components("qcd_shape"), 
-                             ROOT.RooFit.LineColor(ROOT.kGreen))
-            xframe.GetXaxis().SetTitle(BDTshape+'-like BDT Output')
-            xframe.GetYaxis().SetTitleOffset(1.35)
+                             ROOT.RooFit.LineColor(16),
+                             ROOT.RooFit.DrawOption("L"))
+            xframe.GetXaxis().SetTitle('Top+W-like BDT Output')
+            xframe.GetYaxis().SetTitleOffset(1.1)
             xframe.GetYaxis().SetTitle('Events')
             xframe.SetTitle('')
             xframe.SetMinimum(0)
@@ -1041,6 +1055,16 @@ class analyzer(object):
         if 'Sig[0]' not in self.qcdCorrHist.keys():
             self.setCorrHistQCD()
         histQCD.Multiply(self.qcdCorrHist['Sig[0]'])
+
+        for binIter in range(1,self.Bins+1):
+            contamVal = self.qcdPurDict['Sig[0]'][0].GetBinContent(binIter)
+            totalVal =  histQCD.GetBinContent(binIter)
+            diffVal = totalVal-contamVal
+            if diffVal<0:
+                newVal = min(0,contamVal-2*diffVal)
+                self.qcdPurDict['Sig[0]'][0].SetBinContent(binIter,newVal)
+                
+
         histQCD.Add(self.qcdPurDict['Sig[0]'][0],-1) ## sig pur dict is not eff
 
         ## Top/W prediction from SLe and SLm control region
@@ -1065,18 +1089,14 @@ class analyzer(object):
         ## Get non-closure multiplicative factor for top+W ~20%
         fTop = ROOT.TFile.Open('topSystHistsMC.root','read')
         nonClosureFactor = fTop.Get('nonClosureFactor')
-        histL.Multiply(nonClosureFactor)
+        if not self.doData:
+            histL.Multiply(nonClosureFactor)
 
         ## Get non-closure multiplicative factor for QCD ~20%
         ## REMOVED!!
         fQCD = ROOT.TFile.Open('qcdSystHists.root','read')
         nonClosureFactorQCD = fQCD.Get('nonClosureFactorQCD')
         ##histQCD.Multiply(nonClosureFactorQCD)
-
-        ## set negative QCD yields (2 bins) equal to 0
-        for binIter in range(1,self.Bins+1):
-            if histQCD.GetBinContent(binIter)<0:
-                histQCD.SetBinContent(binIter,0)
 
         ## store in prediction dictionary
         self.predDict['QCD'] = histQCD
@@ -1146,9 +1166,20 @@ class analyzer(object):
         ## combine takes hist with N(data events)
         ## for statistical uncertainty
         statHist = self.getStatHist(bkg)
+        statHist2 = statHist.Clone()
+        for binIter in range(1,self.Bins+1):
+            Nevents = statHist.GetBinContent(binIter)
+            if Nevents<1:
+                statHist2.SetBinContent(binIter,1)
+
         ## transfer factor histogram
-        TFhist.Divide(statHist)
+        TFhist.Divide(statHist2)
         
+        for binIter in range(1, self.Bins+1):
+            if TFhist.GetBinContent(binIter)==0:
+                #pur = self.qcdPurDict['Sig[0]'][0].GetBinContent(binIter)
+                cor = self.qcdCorrHist['Sig[0]'].GetBinContent(binIter)
+                TFhist.SetBinContent(binIter,cor)
         return [statHist, TFhist]
 
     def setSystHistsTopW(self):
@@ -1203,7 +1234,7 @@ class analyzer(object):
             fTop.Get('DnLepAccSystHist')]
         self.systDictTopW['TopWHadTauNonClosure'] = [
             fTop.Get('hadTauClosure')]
-        self.systDictTopW['TopWnonClosure'] = [nonClosureFactorSyst]
+        #self.systDictTopW['TopWnonClosure'] = [nonClosureFactorSyst]
 
 
         ## Norm and NStat uncertainties 
@@ -1268,6 +1299,9 @@ class analyzer(object):
         drGraph = ROOT.TGraphErrors(doubleRatio)
         Qdr = RA2b.getDoubleRatioPlot([drGraph],isQCD=True)
 
+        ## make DR viewable after runtime
+        ROOT.SetOwnership(drGraph,0)
+
         drUpSyst = self.predDict['QCD'].Clone()
         drDnSyst = self.predDict['QCD'].Clone()
         for binIter in range(1,self.Bins+1):
@@ -1278,8 +1312,10 @@ class analyzer(object):
         ## MC stat from HDP/LDP correction hist
         corrStat = self.qcdCorrHist['Sig[0]'].Clone()
         for binIter in range(1,self.Bins+1):
+            fracError = (self.qcdCorrHist['Sig[0]'].GetBinError(binIter)/
+                         self.qcdCorrHist['Sig[0]'].GetBinContent(binIter))
             corrStat.SetBinContent(binIter,
-                            1+self.qcdCorrHist['Sig[0]'].GetBinError(binIter))
+                    1+min(fracError,1))
             corrStat.SetBinError(binIter,0)
         self.systDictQCD['QCDmcStat'] = [corrStat]
 
@@ -1332,7 +1368,7 @@ class analyzer(object):
         
     def getSignalHistogram(self, sample, doSF=0, doISR=True, setWeight=None,
                            extraWeight='TrigWeight', applyEffs=True,
-                           JE='', extraCuts=None, cuts=None):
+                           JE='', cuts=None):
         """ Returns signal histogram in signal-like boosted decision tree 
         output. Use this to compute SUSY yields and compute variation for 
         systematic uncertainties
@@ -1396,6 +1432,12 @@ class analyzer(object):
                 dnSyst.SetBinContent(binIter,1-(cv-min(cv,up,dn))/cv)
             else:
                 upSyst.SetBinContent(binIter,1)
+                dnSyst.SetBinContent(binIter,1)
+
+            ## prevent combine errors
+            if upSyst.GetBinContent(binIter)==0:
+                upSyst.SetBinContent(binIter,1)
+            if dnSyst.GetBinContent(binIter)==0:
                 dnSyst.SetBinContent(binIter,1)
 
         return [upSyst,dnSyst]
@@ -1562,6 +1604,74 @@ class analyzer(object):
 
         self.sigSystDict['SignalLumi'] = [systHist]
 
+
+    def subtractSignalContamination(self, sample):
+        """
+        Be sure to do this after computing all systematic uncertainties
+        ***Still need to implement T1tttt SL contamination subtaction**
+        """
+
+        ## Warning message in case we do things out of order
+        if self.sigSystDict == {}:
+            print "***Warning***"
+            print "Any systematic uncertainties computed after"
+            print "signal contamination subtraction will be biased."
+
+        ## top/W contamination
+        topContam = self.predDict['TopW'].Clone()
+
+        ## get number of signal events in the sideband
+        sigSidebandNorm = 0
+        for binIter in range(1,self.Bins-self.nSigBins+1):
+            sigSidebandNorm += self.signalHist.GetBinContent(binIter)
+
+        ## Scale top contamination to sig sideband
+        topContam.Scale(sigSidebandNorm/topContam.Integral())
+            
+        ## QCD contamination
+        cuts = self.ldpCut+self.htCut+self.hpfCaloCut
+        qcdContam = self.getSignalHistogram(sample, cuts=str(cuts))
+                        
+        ## Scale qcd contamination by qcd CR scaling
+        qcdContam.Multiply(self.systDictQCD['QCDNCR'][1])
+                
+        ## Subtract off contamination
+        self.signalHist.Add(topContam,-1)
+        self.signalHist.Add(qcdContam,-1)
+
+        ## single lepton contamination
+        if 'tt' in sample:
+            slContam = self.getSignalHistogram(sample[:-3]+'SL'+sample[-3:])
+            slContam.Multiply(self.systDictTopW['TopWNCR'][1])
+            self.signalHist.Add(slContam,-1)
+
+    def setSigStatHists(self, sample):
+        """ Weights are a little different for signal sample stat and 
+        TF hists systematic gits its own function
+        """
+
+        ## first ensure all bins in signal hist are positive
+        for binIter in range(1,self.Bins+1):
+            val = self.signalHist.GetBinContent(binIter)
+            self.signalHist.SetBinContent(binIter,abs(val))
+        
+        ## get hist with no effs applied
+        noEffs = self.getSignalHistogram(sample,setWeight=1.,
+                                         applyEffs=False,doISR=False,
+                                         extraWeight=None)
+
+        hStat = noEffs.Clone()
+        for binIter in range(1,self.Bins+1):
+            Entries = noEffs.GetEntries()
+            Integral = noEffs.Integral()
+            Nevents = int(round(noEffs.GetBinContent(binIter)*Entries/Integral))
+            hStat.SetBinContent(binIter,Nevents)
+
+        TF = self.signalHist.Clone()
+        TF.Divide(hStat)
+
+        self.sigSystDict['SignalNCR'] = [hStat,TF]
+
     def setSignalSystHists(self, sample):
         """ Set all systematic uncertainties for signal. 
         List:
@@ -1569,9 +1679,8 @@ class analyzer(object):
         still need PU reweighting
         """
 
-        ## first get b-tag SF central value for comparison
-        if sample not in self.signalHist.GetName():
-            self.setSignalHistogram(sample)
+        ## first reset central value for comparison
+        self.setSignalHistogram(sample)
 
         ## btag systematic uncertainties
         self.setBTagSystHists(sample)
@@ -1597,39 +1706,12 @@ class analyzer(object):
         ## Luminosity syst
         self.setLumiSystHist()
 
-    def subtractSignalContamination(self, sample):
-        """
-        Be sure to do this after computing all systematic uncertainties
-        ***Still need to implement T1tttt SL contamination subtaction**
-        """
+        ## now subtract contamination
+        self.subtractSignalContamination(sample)
 
-        ## Warning message in case we do things out of order
-        if self.sigSystDict == {}:
-            print "***Warning***"
-            print "Any systematic uncertainties computed after"
-            print "signal contamination subtraction will be biased."
+        ## set stat and tf hists
+        self.setSigStatHists(sample)
 
-        ## top/W contamination
-        topContam = self.predDict['TopW'].Clone()
-
-        ## get number of signal events in the sideband
-        sigSidebandNorm = 0
-        for binIter in range(1,self.Bins-self.nSigBins+1):
-            sigSidebandNorm += self.signalHist.GetBinContent(binIter)
-
-        ## Scale top contamination to sig sideband
-        topContam.Scale(sigSidebandNorm/topContam.Integral())
-
-        ## QCD contamination
-        cuts = self.ldpCut+self.htCut+self.hpfCaloCut
-        qcdContam = self.getSignalHistogram(sample, extraCuts=str(cuts))
-                        
-        ## Scale qcd contamination by qcd CR scaling
-        qcdContam.Multiply(self.systDictQCD['NCR'][1])
-                
-        ## Subtract off contamination
-        self.signalHist.Add(topContam,-1)
-        self.signalHist.Add(qcdContam,-1)
 
     def getGraphFromHists(self, hist, systDict):
         """
@@ -1699,13 +1781,41 @@ class analyzer(object):
         
         return row
 
-    def makeDataCard(self, sample, doSymmetric=True):
+    def makeDataCard(self, sample):
         """ Makes one datacard for a given signal sample
         """
 
         ## compute signal yield and subtract off contamination
         self.setSignalSystHists(sample)
-        self.subtractSignalContamination(sample)
+
+        ## empirical formula to extract 3-5 times expected limit 
+        ## to help combine tool converge
+        # rMax = round(25/self.signalHist.Integral()
+        #              +45/self.signalHist.GetBinContent(self.Bins+1),3)
+        
+        ## stored sample to extract rMax
+        limFile = ROOT.TFile('rMaxGraphs.root')
+        limGr = limFile.Get('grGograph_smoothed_Exp')
+        
+        mGl = int(sample.partition('_')[2].partition('_')[0])
+        mLSP = int(sample.partition('_')[2].partition('_')[2].partition('_')[0])
+        mLSP2 = mLSP
+        if (mGl-mLSP)<130:
+            mLSP2 = mGl-130
+
+        rMax = round(8*limGr.Interpolate(mGl,mLSP2),3)
+
+        if sample[1]=='2':
+            mGl2 = int(5 * round(float(mGl)/5))
+            xsecs = xsec.getStopGr()
+            mLSP2 = max(mLSP,3)
+            limGr = limFile.Get('T2ttGr')
+            stopXsec = xsecs[mGl2][0]
+            rMax = abs(round(6*limGr.Interpolate(mGl,mLSP2)/stopXsec,3))
+
+        if rMax == 0:
+            rMax = 60
+
 
         # collect Zinv and signal predictions in predDict
         self.predDict['Zinv'] = self.zPredDict['Sig[0]']
@@ -1714,9 +1824,21 @@ class analyzer(object):
         ## get root e.g. T1tttt, T1bbbb, T2tt, ...
         nRoot = 8-2*int(sample[1])
         Root = sample[:nRoot]
+
+        ## labels for samples
+        processes = ['Signal','Zinv','TopW','QCD']
+
+        ## list of systematics which are fully correlated
+        corrSysts = ['SignalLumi', 'SignalJetID', 
+                     'SignalScale', 'SignalISR',
+                     'TopWNorm', 'QCDNorm', 'ZinvNorm']
+        corrSuffix = '_Cor'
+
+        ## empty dict to add nuisances 
+        fullNuisanceDict = {}
         
         ## actual datacard (txt file)
-        card = open(Root+"/"+sample+'.txt', "w") 
+        card = open(Root+"/"+sample+'_rMax'+str(rMax)+'.txt', "w") 
 
         ## label top of file, first with sample mass parameters
         header ="# SUSY model: "
@@ -1725,20 +1847,12 @@ class analyzer(object):
 
         imax = self.nSigBins ## num channels
         jmax = 3 ## num backgrounds QCD + Zinv +topW
+
+        fullKeyList = (self.sigSystDict.keys()+self.systDictQCD.keys()
+                       +self.systDictTopW.keys()+self.zSystDict.keys())
+        
         ## num nuisance parameters use '*' for automatic counting
-        kmax = '*'
-
-        ## labels for samples
-        processes = ['Signal','Zinv','TopW','QCD']
-
-        ## list of systematics which are fully correlated
-        corrSysts = ['SignalLumi', 'SignalIsoTrk', 'SignalJetID', 
-                     'SignalPileUp', 'SignalScale', 'SignalISR',
-                     'TopWNorm', 'TopWnonClosure', 'QCDNorm', 'ZinvNorm']
-        corrSuffix = '_Cor'
-
-        ## empty dict to add nuisances 
-        fullNuisanceDict = {}
+        kmax = len(fullKeyList)*self.nSigBins-len(corrSysts)*(self.nSigBins-1)
 
         ## first Bin (where signal region begins)
         fB = self.Bins-self.nSigBins+1
@@ -1752,6 +1866,12 @@ class analyzer(object):
         process1 = ['process','','']+processes*self.nSigBins
         process2 = ['process','','']+[0,1,2,3]*self.nSigBins
         rate = ['rate','','']
+
+
+        #####
+        ## This could be much better but it works and I need to graduate
+        ####
+
         for iB in sB:
             nBins.append(iB)
             nObs.append(int(self.dataHist.GetBinContent(iB)))
@@ -1766,23 +1886,248 @@ class analyzer(object):
                     if iB!=sB[0]:
                         continue
                     sigLabel = sigSyst+'_Cor'
-                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN']
-                    if len(sigSystDict[sigLabel])==1:
-                        fullNuisanceDict[sigLabel].append(
-                            round(sigSystDict[sigLabel][0],6))
-                    else:
-                        fullNuisanceDict[sigLabel].append(
-                            str(round(sigSystDict[sigLabel][1],6))+'/'+
-                            str(round(sigSystDict[sigLabel][1],6)))
-                    ## add dashes
-                    fullNuisanceDict[sigLabel]+='-'*(self.nSigBins*(jmax+1)-1)
-                if 'NCR' in sigSyst:
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','']
+                    for iB2 in sB:
+                        if len(self.sigSystDict[sigSyst])==1:
+                            fullNuisanceDict[sigLabel].append(
+            round(self.sigSystDict[sigSyst][0].GetBinContent(iB2),6))
+                        else:
+                            fullNuisanceDict[sigLabel].append(str(
+            round(self.sigSystDict[sigSyst][1].GetBinContent(iB2),6))+'/'+str(
+            round(self.sigSystDict[sigSyst][0].GetBinContent(iB2),6)))
+                        ## add dashes
+                        fullNuisanceDict[sigLabel]+='-'*(jmax)
+                    
+                elif 'NCR' in sigSyst:
                     sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (gamma function)
                     fullNuisanceDict[sigLabel] = [sigLabel,'gmN']
-                    #fullNuisanceDict[sigLabel].append(
+                    ## N stat
+                    fullNuisanceDict[sigLabel].append(
+                        int(self.sigSystDict[sigSyst][0].GetBinContent(iB)))
                     ## add dashes
-                    #fullNuisanceDict[sigLabel] = 
-        ## Number of signal events
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    ## TF
+                    fullNuisanceDict[sigLabel].append(
+                        round(self.sigSystDict[sigSyst][1].GetBinContent(iB),6))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += 3*['-']+(
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+                else:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (log normal)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','']
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    if len(self.sigSystDict[sigSyst])==1:
+                        fullNuisanceDict[sigLabel].append(
+            round(self.sigSystDict[sigSyst][0].GetBinContent(iB),6))
+                    else:
+                        fullNuisanceDict[sigLabel].append(str(
+            round(self.sigSystDict[sigSyst][1].GetBinContent(iB),6))+'/'+str(
+            round(self.sigSystDict[sigSyst][0].GetBinContent(iB),6)))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += 3*['-']+(
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+
+ 
+
+
+
+
+
+
+
+                    
+
+            for sigSyst in self.zSystDict.keys():
+                if sigSyst in corrSysts:
+                    if iB!=sB[0]:
+                        continue
+                    sigLabel = sigSyst+'_Cor'
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','','-']
+                    for iB2 in sB:
+                        if len(self.zSystDict[sigSyst])==1:
+                            fullNuisanceDict[sigLabel].append(
+            round(self.zSystDict[sigSyst][0].GetBinContent(iB2),6))
+                        else:
+                            fullNuisanceDict[sigLabel].append(str(
+            round(self.zSystDict[sigSyst][1].GetBinContent(iB2),6))+'/'+str(
+            round(self.zSystDict[sigSyst][0].GetBinContent(iB2),6)))
+                        ## add dashes
+                        fullNuisanceDict[sigLabel]+='-'*jmax
+                    fullNuisanceDict[sigLabel] = fullNuisanceDict[sigLabel][:-1]
+                    
+                elif 'NCR' in sigSyst:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (gamma function)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'gmN']
+                    ## N stat
+                    fullNuisanceDict[sigLabel].append(
+                        int(self.zSystDict[sigSyst][0].GetBinContent(iB)))
+                    fullNuisanceDict[sigLabel] += ['-']
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    ## TF
+                    fullNuisanceDict[sigLabel].append(
+                    round(self.zSystDict[sigSyst][1].GetBinContent(iB),6))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += ['-','-']+(
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+                else:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (log normal)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','']
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += ['-']
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    if len(self.zSystDict[sigSyst])==1:
+                        fullNuisanceDict[sigLabel].append(
+            round(self.zSystDict[sigSyst][0].GetBinContent(iB),6))
+                    else:
+                        fullNuisanceDict[sigLabel].append(str(
+            round(self.zSystDict[sigSyst][1].GetBinContent(iB),6))+'/'+str(
+            round(self.zSystDict[sigSyst][0].GetBinContent(iB),6)))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += 2*['-']+(
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+
+ 
+
+
+                    
+
+            for sigSyst in self.systDictTopW.keys():
+                if sigSyst in corrSysts:
+                    if iB!=sB[0]:
+                        continue
+                    sigLabel = sigSyst+'_Cor'
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','','-','-']
+                    for iB2 in sB:
+                        if len(self.systDictTopW[sigSyst])==1:
+                            fullNuisanceDict[sigLabel].append(
+            round(self.systDictTopW[sigSyst][0].GetBinContent(iB2),6))
+                        else:
+                            fullNuisanceDict[sigLabel].append(str(
+            round(self.systDictTopW[sigSyst][1].GetBinContent(iB2),6))+'/'+str(
+            round(self.systDictTopW[sigSyst][0].GetBinContent(iB2),6)))
+                        ## add dashes
+                        fullNuisanceDict[sigLabel]+='-'*jmax
+                    fullNuisanceDict[sigLabel] = fullNuisanceDict[sigLabel][:-2]
+                    
+                elif 'NCR' in sigSyst:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (gamma function)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'gmN']
+                    ## N stat
+                    fullNuisanceDict[sigLabel].append(
+                        int(self.systDictTopW[sigSyst][0].GetBinContent(iB)))
+                    fullNuisanceDict[sigLabel] += ['-','-']
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    ## TF
+                    fullNuisanceDict[sigLabel].append(
+                    round(self.systDictTopW[sigSyst][1].GetBinContent(iB),6))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += ['-']+(
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+                else:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (log normal)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','']
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += ['-','-']
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    if len(self.systDictTopW[sigSyst])==1:
+                        fullNuisanceDict[sigLabel].append(
+            round(self.systDictTopW[sigSyst][0].GetBinContent(iB),6))
+                    else:
+                        fullNuisanceDict[sigLabel].append(str(
+            round(self.systDictTopW[sigSyst][1].GetBinContent(iB),6))+'/'+str(
+            round(self.systDictTopW[sigSyst][0].GetBinContent(iB),6)))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += ['-']+(
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+
+ 
+
+
+
+                    
+
+            for sigSyst in self.systDictQCD.keys():
+                if sigSyst in corrSysts:
+                    if iB!=sB[0]:
+                        continue
+                    sigLabel = sigSyst+'_Cor'
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','','-','-','-']
+                    for iB2 in sB:
+                        if len(self.systDictQCD[sigSyst])==1:
+                            fullNuisanceDict[sigLabel].append(
+            round(self.systDictQCD[sigSyst][0].GetBinContent(iB2),6))
+                        else:
+                            fullNuisanceDict[sigLabel].append(str(
+            round(self.systDictQCD[sigSyst][1].GetBinContent(iB2),6))+'/'+str(
+            round(self.systDictQCD[sigSyst][0].GetBinContent(iB2),6)))
+                        ## add dashes
+                        fullNuisanceDict[sigLabel]+='-'*jmax
+                    fullNuisanceDict[sigLabel] = fullNuisanceDict[sigLabel][:-3]
+                    
+                elif 'NCR' in sigSyst:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (gamma function)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'gmN']
+                    ## N stat
+                    fullNuisanceDict[sigLabel].append(
+                        int(self.systDictQCD[sigSyst][0].GetBinContent(iB)))
+                    fullNuisanceDict[sigLabel] += ['-','-','-']
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    ## TF
+                    fullNuisanceDict[sigLabel].append(
+                    round(self.systDictQCD[sigSyst][1].GetBinContent(iB),6))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += (
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+                else:
+                    sigLabel = sigSyst+'_'+str(iB)
+                    ## preamble (log normal)
+                    fullNuisanceDict[sigLabel] = [sigLabel,'lnN','']
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += ['-','-','-']
+                    fullNuisanceDict[sigLabel] += (iB-sB[0])*(jmax+1)*['-']
+                    if len(self.systDictQCD[sigSyst])==1:
+                        fullNuisanceDict[sigLabel].append(
+            round(self.systDictQCD[sigSyst][0].GetBinContent(iB),6))
+                    else:
+                        fullNuisanceDict[sigLabel].append(str(
+            round(self.systDictQCD[sigSyst][1].GetBinContent(iB),6))+'/'+str(
+            round(self.systDictQCD[sigSyst][0].GetBinContent(iB),6)))
+                    ## add dashes
+                    fullNuisanceDict[sigLabel] += (
+                        sB[len(sB)-1]-iB)*['-']*(jmax+1)
+
+ 
+
+               # if sigSyst in corrSysts:
+                #     if iB!=sB[0]:
+                #         continue
+                #     sigLabel = sigSyst+'_Cor'
+                #     fullNuisanceDict[sigLabel] = [sigLabel,'lnN','']
+                #     if len(self.sigSystDict[sigSyst])==1:
+                #         fullNuisanceDict[sigLabel].append(
+                #             round(self.sigSystDict[sigSyst][0].GetBinContent(
+                #                 iB-self.nSigBins),6))
+                #     else:
+                #         fullNuisanceDict[sigLabel].append(str(
+                #             round(self.sigSystDict[sigSyst][1].GetBinContent(
+                #                 iB-self.nSigBins),6))+'/'+str(
+                #             round(self.sigSystDict[sigSyst][0].GetBinContent(
+                #                 iB-self.nSigBins),6)))
+                #     ## add dashes
+                #     fullNuisanceDict[sigLabel]+='-'*(self.nSigBins*(jmax+1)-1)
+
+
 
         card.write(header)
         card.write("------------\n")
@@ -1797,6 +2142,7 @@ class analyzer(object):
         card.write(self.getLine(process1))
         card.write(self.getLine(process2))
         card.write(self.getLine(rate))
+        card.write("------------\n")
         ## nuisances are here
         for iB in sB:
             for proc in processes:
@@ -1812,7 +2158,6 @@ class analyzer(object):
                     if Syst.endswith(str(iB)):
                         card.write(self.getLine(fullNuisanceDict[Syst]))
                                             
-        card.write("------------\n")
         card.close()
 
     def makeAllCards(self, sampleClass):
@@ -1822,7 +2167,9 @@ class analyzer(object):
 
         ## Get full list of files available
         listOfFiles = os.listdir('/media/hdd/work/data/lpcTrees'+
-                                 '/Skims/Run2ProductionV11/scan/tree_signal')
+                                 '/Skims/Run2ProductionV12/scan/tree_signal')
+
+        outDirFiles = os.listdir(sampleClass)
 
         ## convert file name to RA2b readable sample name
         ## example: tree_T1qqqq_600_1_fast.root -> T1qqqq_600_1_fastIDP
@@ -1836,7 +2183,12 @@ class analyzer(object):
 
         ## make cards for each signal model point
         for sample in listOfSamples:
-        
+            
+            if sample in outDirFiles:
+                continue
+
+            print sample
+
             ## reset signal histograms
             self.signalHist = ROOT.TH1D()
             self.sigSystDict = {}
